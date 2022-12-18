@@ -1,0 +1,32 @@
+syntax = "proto3";
+package rsraft;
+
+message RequestVoteRequest {
+  int64 term = 1;
+  string candidate_id = 2;
+  int64 last_log_index = 3;
+  int64 last_log_term = 4;
+}
+
+message RequestVoteResult {
+  int64 term = 1;
+  bool vote_granted = 2;
+}
+
+message AppendEntriesRequest {
+  int64 term = 1;
+  string leader_id = 2;
+  int64 prev_log_index = 3;
+  int64 prev_log_term = 4;
+  int64 leader_commit_index = 5;
+}
+
+message AppendEntriesResult {
+  int64 term = 1;
+  bool success = 2;
+}
+
+service Raft {
+  rpc RequestVote(RequestVoteRequest) returns (RequestVoteResult);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResult);
+}
