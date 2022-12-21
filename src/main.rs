@@ -1,4 +1,5 @@
 use std::borrow::BorrowMut;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -17,10 +18,7 @@ pub mod rsraft {
     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let mut sig_term = signal(SignalKind::terminate()).context("failed to setup SIGTERM channel")?;
-    let mut sig_int = signal(SignalKind::interrupt()).context("failed to setup SIGINT channel")?;
+async fn run_process<F: Future<Output=()>>(close_signal: F, server_config: RaftServerConfig) -> Result<()> {
     let (tx, rx) = watch::channel(());
     let rx1 = rx.clone();
     let rx2 = rx.clone();
@@ -28,10 +26,7 @@ async fn main() -> Result<()> {
     let mut raft_state1 = raft_state.clone();
     let mut raft_state2 = raft_state.clone();
 
-    let config = RaftServerConfig {
-        port: 8080,
-    };
-    let mut server = RaftServerDaemon::new(config);
+    let mut server = RaftServerDaemon::new(server_config);
     let s = tokio::spawn(async move {
         let _ = server.start_server(rx1, raft_state1).await;
     });
@@ -46,18 +41,84 @@ async fn main() -> Result<()> {
         state.become_follower(0);
     }
 
-    select! {
-        _ = sig_term.recv() => {
-            println!("[INFO] Received SIGTERM");
-            tx.send(()).context("failed to send SIGTERM channel")?;
-        }
-        _ = sig_int.recv() => {
-            println!("[INFO] Received SIGINT");
-            tx.send(()).context("failed to send SIGINT channel")?;
-        }
-    }
+    close_signal.await;
+    tx.send(()).context("failed to send signal")?;
     s.await.unwrap();
     r.await.unwrap();
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut sig_term = signal(SignalKind::terminate()).context("failed to setup SIGTERM channel")?;
+    let mut sig_int = signal(SignalKind::interrupt()).context("failed to setup SIGINT channel")?;
+    let config = RaftServerConfig {
+        port: 8080,
+    };
+    let signal = async {
+        select! {
+            _ = sig_term.recv() => {
+                println!("[INFO] Received SIGTERM");
+            }
+            _ = sig_int.recv() => {
+                println!("[INFO] Received SIGINT");
+            }
+        }
+    };
+    run_process(signal, config).await?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    use tokio::sync::watch::channel;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test() {
+        let (tx, rx) = channel(());
+        let mut rx1 = rx.clone();
+        let mut rx2 = rx.clone();
+        let mut rx3 = rx.clone();
+        let close_signal_1 = async move {
+            rx1.changed().await.unwrap();
+        };
+        let close_signal_2 = async move {
+            rx2.changed().await.unwrap();
+        };
+        let close_signal_3 = async move {
+            rx3.changed().await.unwrap();
+        };
+        let server_config_1 = RaftServerConfig {
+            port: 8070,
+        };
+        let server_config_2 = RaftServerConfig {
+            port: 8080,
+        };
+        let server_config_3 = RaftServerConfig {
+            port: 8090,
+        };
+
+        let h1 = tokio::spawn(async move {
+            run_process(close_signal_1, server_config_1).await.unwrap();
+        });
+        let h2 = tokio::spawn(async move {
+            run_process(close_signal_2, server_config_2).await.unwrap();
+        });
+        let h3 = tokio::spawn(async move {
+            run_process(close_signal_3, server_config_3).await.unwrap();
+        });
+
+        tokio::time::sleep(Duration::from_millis(5000)).await;
+        tx.send(()).unwrap();
+        h1.await.unwrap();
+        h2.await.unwrap();
+        h3.await.unwrap();
+    }
 }
