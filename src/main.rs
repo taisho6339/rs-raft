@@ -57,6 +57,7 @@ async fn main() -> Result<()> {
         }
     }
     s.await.unwrap();
+    r.await.unwrap();
 
     Ok(())
 }
