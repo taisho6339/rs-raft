@@ -8,6 +8,7 @@ use tokio::sync::watch::Receiver;
 use tokio::time::interval;
 
 use crate::client::RaftServiceClient;
+use crate::rsraft::RequestVoteRequest;
 
 const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
@@ -69,6 +70,7 @@ impl RaftConsensusState {
         // self.voted_for = sel
         self.current_term += 1;
         self.current_role = RaftNodeRole::Candidate;
+        self.received_granted = 1;
         self.last_heartbeat_time = Utc::now();
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
     }
@@ -91,6 +93,11 @@ impl RaftReconciler {
         state.current_role
     }
 
+    fn current_term(&mut self) -> i64 {
+        let state = self.state.borrow_mut().lock().unwrap();
+        state.current_term
+    }
+
     fn reconcile_candidate(&mut self) {}
 
     fn reconcile_forwarder(&mut self) {
@@ -100,6 +107,12 @@ impl RaftReconciler {
         if duration > state.election_timeout.num_milliseconds() {
             println!("[INFO] Become a candidate");
             state.become_candidate();
+            self.client.request_vote(RequestVoteRequest {
+                candidate_id: self.node_id.clone(),
+                term: state.current_term,
+                last_log_index: 0,
+                last_log_term: 0,
+            });
         }
     }
 

@@ -14,11 +14,11 @@ use crate::server::{RaftServerConfig, RaftServerDaemon};
 mod raft;
 mod server;
 mod client;
-// mod rsraft;
+mod rsraft;
 
-pub mod rsraft {
-    tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
-}
+// pub mod rsraft {
+//     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
+// }
 
 async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, server_config: RaftServerConfig, hosts: Vec<&'static str>) -> Result<()> {
     let (tx, rx) = watch::channel(());
@@ -108,22 +108,35 @@ mod tests {
         let server_config_3 = RaftServerConfig {
             port: 8090,
         };
-        // let hosts = vec!["localhost:8070", "localhost:8080", "localhost:8090"];
-        //
-        // let h1 = tokio::spawn(async move {
-        //     run_process(close_signal_1, server_config_1, hosts.clone()).await.unwrap();
-        // });
-        // let h2 = tokio::spawn(async move {
-        //     run_process(close_signal_2, server_config_2, hosts.clone()).await.unwrap();
-        // });
-        // let h3 = tokio::spawn(async move {
-        //     run_process(close_signal_3, server_config_3, hosts.clone()).await.unwrap();
-        // });
-        //
-        // tokio::time::sleep(Duration::from_millis(5000)).await;
-        // tx.send(()).unwrap();
-        // h1.await.unwrap();
-        // h2.await.unwrap();
-        // h3.await.unwrap();
+        let h1 = tokio::spawn(async move {
+            run_process(
+                close_signal_1,
+                String::from("localhost:8070"),
+                server_config_1,
+                vec!["http://localhost:8080", "http://localhost:8090"],
+            ).await.unwrap();
+        });
+        let h2 = tokio::spawn(async move {
+            run_process(
+                close_signal_2,
+                String::from("localhost:8080"),
+                server_config_2,
+                vec!["http://localhost:8070", "http://localhost:8090"],
+            ).await.unwrap();
+        });
+        let h3 = tokio::spawn(async move {
+            run_process(
+                close_signal_3,
+                String::from("localhost:8090"),
+                server_config_3,
+                vec!["http://localhost:8070", "http://localhost:8080"],
+            ).await.unwrap();
+        });
+
+        tokio::time::sleep(Duration::from_millis(10000)).await;
+        tx.send(()).unwrap();
+        h1.await.unwrap();
+        h2.await.unwrap();
+        h3.await.unwrap();
     }
 }
