@@ -1,4 +1,4 @@
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
@@ -6,6 +6,8 @@ use rand::{Rng, thread_rng};
 use tokio::select;
 use tokio::sync::watch::Receiver;
 use tokio::time::interval;
+
+use crate::client::RaftServiceClient;
 
 const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
@@ -20,15 +22,18 @@ pub enum RaftNodeRole {
 
 pub struct RaftConsensusState {
     current_role: RaftNodeRole,
-    current_term: u64,
+    current_term: i64,
     election_timeout: Duration,
     last_heartbeat_time: DateTime<Utc>,
     voted_for: i64,
+    received_granted: i64,
 }
 
 pub struct RaftReconciler {
+    node_id: String,
     signal: Receiver<()>,
     state: Arc<Mutex<RaftConsensusState>>,
+    client: RaftServiceClient,
 }
 
 impl Default for RaftConsensusState {
@@ -38,6 +43,7 @@ impl Default for RaftConsensusState {
         let election_timeout = Duration::seconds(0);
         let last_heartbeat_time = Utc::now();
         let voted_for = -1;
+        let received_granted = 0;
 
         Self {
             voted_for,
@@ -45,12 +51,13 @@ impl Default for RaftConsensusState {
             current_role,
             current_term,
             last_heartbeat_time,
+            received_granted,
         }
     }
 }
 
 impl RaftConsensusState {
-    pub(crate) fn become_follower(&mut self, term: u64) {
+    pub(crate) fn become_follower(&mut self, term: i64) {
         self.voted_for = -1;
         self.current_term = term;
         self.current_role = RaftNodeRole::Follower;
@@ -70,10 +77,12 @@ impl RaftConsensusState {
 }
 
 impl RaftReconciler {
-    pub fn new(state: Arc<Mutex<RaftConsensusState>>, signal: Receiver<()>) -> Self {
+    pub fn new(signal: Receiver<()>, node_id: String, state: Arc<Mutex<RaftConsensusState>>, client: RaftServiceClient) -> Self {
         Self {
+            node_id,
             signal,
             state,
+            client,
         }
     }
 
