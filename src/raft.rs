@@ -13,7 +13,7 @@ use crate::rsraft::RequestVoteRequest;
 const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 pub enum RaftNodeRole {
     Dead,
     Leader,
@@ -22,12 +22,12 @@ pub enum RaftNodeRole {
 }
 
 pub struct RaftConsensusState {
-    current_role: RaftNodeRole,
-    current_term: i64,
-    election_timeout: Duration,
-    last_heartbeat_time: DateTime<Utc>,
-    voted_for: i64,
-    received_granted: i64,
+    pub current_role: RaftNodeRole,
+    pub current_term: i64,
+    pub election_timeout: Duration,
+    pub last_heartbeat_time: DateTime<Utc>,
+    pub voted_for: i64,
+    pub received_granted: i64,
 }
 
 pub struct RaftReconciler {
@@ -60,6 +60,7 @@ impl Default for RaftConsensusState {
 impl RaftConsensusState {
     pub(crate) fn become_follower(&mut self, term: i64) {
         self.voted_for = -1;
+        self.received_granted = 0;
         self.current_term = term;
         self.current_role = RaftNodeRole::Follower;
         self.last_heartbeat_time = Utc::now();
@@ -75,7 +76,11 @@ impl RaftConsensusState {
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
     }
 
-    fn become_leader(&mut self) {}
+    pub(crate) fn become_leader(&mut self) {
+        self.voted_for = -1;
+        self.received_granted = 0;
+        self.current_role = RaftNodeRole::Leader;
+    }
 }
 
 impl RaftReconciler {
@@ -98,9 +103,12 @@ impl RaftReconciler {
         state.current_term
     }
 
-    fn reconcile_candidate(&mut self) {}
+    fn reconcile_candidate(&mut self) {
+
+    }
 
     fn reconcile_forwarder(&mut self) {
+        let s1 = self.state.clone();
         let mut state = self.state.borrow_mut().lock().unwrap();
         let now = Utc::now();
         let duration = now.timestamp_millis() - state.last_heartbeat_time.timestamp_millis();
@@ -112,7 +120,7 @@ impl RaftReconciler {
                 term: state.current_term,
                 last_log_index: 0,
                 last_log_term: 0,
-            });
+            }, 2, s1);
         }
     }
 
@@ -132,7 +140,7 @@ impl RaftReconciler {
                             println!("[INFO] Dead");
                         }
                         RaftNodeRole::Leader => {
-                            println!("[INFO] Leader");
+                            println!("[INFO] Reconcile Leader");
                         }
                         RaftNodeRole::Follower => {
                             println!("[INFO] Reconcile Follower");
