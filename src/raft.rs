@@ -117,16 +117,14 @@ impl RaftReconciler {
         state.current_term
     }
 
-    fn reconcile_candidate(&mut self) {}
-
-    fn reconcile_forwarder(&mut self) {
+    fn reconcile_forwarder_or_candidate(&mut self) {
         let s1 = self.state.clone();
         let mut state = self.state.borrow_mut().lock().unwrap();
         let now = Utc::now();
         let duration = now.timestamp_millis() - state.last_heartbeat_time.timestamp_millis();
         if duration > state.election_timeout.num_milliseconds() {
-            println!("[INFO] Become a candidate");
             state.become_candidate();
+            println!("[INFO] Become a candidate on term: {}", state.current_term);
             self.client.request_vote(RequestVoteRequest {
                 candidate_id: String::from(self.cluster_info.node_id),
                 term: state.current_term,
@@ -156,10 +154,11 @@ impl RaftReconciler {
                         }
                         RaftNodeRole::Follower => {
                             println!("[INFO] Reconcile Follower");
-                            self.reconcile_forwarder();
+                            self.reconcile_forwarder_or_candidate();
                         }
                         RaftNodeRole::Candidate => {
                             println!("[INFO] Reconcile Candidate");
+                            self.reconcile_forwarder_or_candidate();
                         }
                     }
                 }
