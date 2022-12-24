@@ -6,14 +6,16 @@ use anyhow::{Context, Result};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
-use crate::client::RaftServiceClient;
 
-use crate::raft::{ClusterInfo, RaftConsensusState, RaftReconciler};
-use crate::server::{RaftServerConfig, RaftServerDaemon};
+use crate::raft_client::RaftServiceClient;
+use crate::raft_reconciler::RaftReconciler;
+use crate::raft_server::{RaftServerConfig, RaftServerDaemon};
+use crate::raft_state::{ClusterInfo, RaftConsensusState};
 
-mod raft;
-mod server;
-mod client;
+mod raft_state;
+mod raft_reconciler;
+mod raft_server;
+mod raft_client;
 mod rsraft;
 
 // pub mod rsraft {

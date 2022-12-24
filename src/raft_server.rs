@@ -6,8 +6,8 @@ use tokio::sync::watch::Receiver;
 use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
 
-use crate::raft::RaftNodeRole::Dead;
-use crate::RaftConsensusState;
+use crate::raft_state::RaftConsensusState;
+use crate::raft_state::RaftNodeRole::Dead;
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;

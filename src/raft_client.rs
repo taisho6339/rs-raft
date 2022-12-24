@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use tonic::transport::{Channel, Endpoint};
 
-use crate::RaftConsensusState;
-use crate::raft::RaftNodeRole::Candidate;
+use crate::raft_state::RaftConsensusState;
+use crate::raft_state::RaftNodeRole::Candidate;
 use crate::rsraft::{AppendEntriesRequest, RequestVoteRequest};
 use crate::rsraft::raft_client::RaftClient;
 
