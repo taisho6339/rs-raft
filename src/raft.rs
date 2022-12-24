@@ -31,15 +31,15 @@ pub struct RaftConsensusState {
 }
 
 pub struct ClusterInfo {
-    node_id: &'static str,
-    topology: Vec<&'static str>,
+    pub node_id: &'static str,
+    pub other_hosts: Vec<&'static str>,
 }
 
 impl ClusterInfo {
     pub fn new(node_id: &'static str, hosts: Vec<&'static str>) -> Self {
         Self {
             node_id,
-            topology: hosts,
+            other_hosts: hosts,
         }
     }
 }
@@ -126,14 +126,13 @@ impl RaftReconciler {
         let duration = now.timestamp_millis() - state.last_heartbeat_time.timestamp_millis();
         if duration > state.election_timeout.num_milliseconds() {
             println!("[INFO] Become a candidate");
-            let cluster = &self.cluster_info;
             state.become_candidate();
             self.client.request_vote(RequestVoteRequest {
-                candidate_id: String::from(cluster.node_id),
+                candidate_id: String::from(self.cluster_info.node_id),
                 term: state.current_term,
                 last_log_index: 0,
                 last_log_term: 0,
-            }, 2, s1);
+            }, &self.cluster_info, s1);
         }
     }
 
