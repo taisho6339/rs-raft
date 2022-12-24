@@ -1,4 +1,5 @@
 use std::borrow::BorrowMut;
+use std::fmt::format;
 use std::sync::{Arc, Mutex};
 
 use tonic::transport::{Channel, Endpoint};
@@ -25,14 +26,15 @@ impl RaftServiceClient {
         }
     }
 
-    pub fn request_vote(&self, req: RequestVoteRequest, cluster_info: &ClusterInfo, state: Arc<Mutex<RaftConsensusState>>) {
+    pub fn request_vote(&self, req: RequestVoteRequest, time_out_millis: i64, cluster_info: &ClusterInfo, state: Arc<Mutex<RaftConsensusState>>) {
         for c in self.clients.iter() {
             let r = req.clone();
             let mut c1 = c.clone();
             let mut s1 = state.clone();
             let granted_objective = (cluster_info.other_hosts.len() + 1) as i64;
             tokio::spawn(async move {
-                let request = tonic::Request::new(r);
+                let mut request = tonic::Request::new(r);
+                request.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
                 let response = c1.request_vote(request).await;
                 if response.is_err() {
                     return;

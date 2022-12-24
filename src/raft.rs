@@ -132,7 +132,7 @@ impl RaftReconciler {
                 term: state.current_term,
                 last_log_index: 0,
                 last_log_term: 0,
-            }, &self.cluster_info, s1);
+            }, state.election_timeout.num_milliseconds(), &self.cluster_info, s1);
         }
     }
 
