@@ -26,12 +26,26 @@ pub struct RaftConsensusState {
     pub current_term: i64,
     pub election_timeout: Duration,
     pub last_heartbeat_time: DateTime<Utc>,
-    pub voted_for: i64,
+    pub voted_for: String,
     pub received_granted: i64,
 }
 
+pub struct ClusterInfo {
+    node_id: &'static str,
+    topology: Vec<&'static str>,
+}
+
+impl ClusterInfo {
+    pub fn new(node_id: &'static str, hosts: Vec<&'static str>) -> Self {
+        Self {
+            node_id,
+            topology: hosts,
+        }
+    }
+}
+
 pub struct RaftReconciler {
-    node_id: String,
+    cluster_info: ClusterInfo,
     signal: Receiver<()>,
     state: Arc<Mutex<RaftConsensusState>>,
     client: RaftServiceClient,
@@ -43,7 +57,7 @@ impl Default for RaftConsensusState {
         let current_term = 0;
         let election_timeout = Duration::seconds(0);
         let last_heartbeat_time = Utc::now();
-        let voted_for = -1;
+        let voted_for = String::from("");
         let received_granted = 0;
 
         Self {
@@ -59,7 +73,7 @@ impl Default for RaftConsensusState {
 
 impl RaftConsensusState {
     pub(crate) fn become_follower(&mut self, term: i64) {
-        self.voted_for = -1;
+        self.voted_for = String::from("");
         self.received_granted = 0;
         self.current_term = term;
         self.current_role = RaftNodeRole::Follower;
@@ -77,16 +91,16 @@ impl RaftConsensusState {
     }
 
     pub(crate) fn become_leader(&mut self) {
-        self.voted_for = -1;
+        self.voted_for = String::from("");
         self.received_granted = 0;
         self.current_role = RaftNodeRole::Leader;
     }
 }
 
 impl RaftReconciler {
-    pub fn new(signal: Receiver<()>, node_id: String, state: Arc<Mutex<RaftConsensusState>>, client: RaftServiceClient) -> Self {
+    pub fn new(signal: Receiver<()>, cluster_info: ClusterInfo, state: Arc<Mutex<RaftConsensusState>>, client: RaftServiceClient) -> Self {
         Self {
-            node_id,
+            cluster_info,
             signal,
             state,
             client,
@@ -103,9 +117,7 @@ impl RaftReconciler {
         state.current_term
     }
 
-    fn reconcile_candidate(&mut self) {
-
-    }
+    fn reconcile_candidate(&mut self) {}
 
     fn reconcile_forwarder(&mut self) {
         let s1 = self.state.clone();
@@ -114,9 +126,10 @@ impl RaftReconciler {
         let duration = now.timestamp_millis() - state.last_heartbeat_time.timestamp_millis();
         if duration > state.election_timeout.num_milliseconds() {
             println!("[INFO] Become a candidate");
+            let cluster = &self.cluster_info;
             state.become_candidate();
             self.client.request_vote(RequestVoteRequest {
-                candidate_id: self.node_id.clone(),
+                candidate_id: String::from(cluster.node_id),
                 term: state.current_term,
                 last_log_index: 0,
                 last_log_term: 0,

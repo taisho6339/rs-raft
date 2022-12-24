@@ -1,10 +1,11 @@
 use std::sync::{Arc, Mutex};
-use anyhow::Context;
 
+use anyhow::Context;
 use tokio::sync::watch::Receiver;
-use tonic::{Request, Response, Status};
+use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
 
+use crate::raft::RaftNodeRole::Dead;
 use crate::RaftConsensusState;
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
@@ -38,12 +39,35 @@ impl Raft for RaftServerHandler {
         &self,
         request: Request<RequestVoteRequest>,
     ) -> Result<Response<RequestVoteResult>, Status> {
-        let reply = RequestVoteResult {
-            term: 1,
-            vote_granted: true,
-        };
+        let sc = self.raft_state.clone();
+        let mut s = sc.lock().unwrap();
+        if s.current_role == Dead {
+            return Err(Status::new(Code::Unavailable, "This node is dead"));
+        }
 
-        Ok(Response::new(reply))
+        let args = request.get_ref();
+        if args.term > s.current_term {
+            s.become_follower(args.term);
+        }
+
+        // FIXME:
+        let (last_log_term, last_log_index) = (0, 0);
+        let acceptable = args.term == s.current_term &&
+            (args.candidate_id == s.voted_for || s.voted_for == "") &&
+            (args.last_log_term > last_log_term || (args.last_log_term == last_log_term && args.last_log_index >= last_log_index));
+
+        if acceptable {
+            s.voted_for = args.candidate_id.clone();
+            Ok(Response::new(RequestVoteResult {
+                vote_granted: true,
+                term: s.current_term,
+            }))
+        } else {
+            Ok(Response::new(RequestVoteResult {
+                vote_granted: false,
+                term: s.current_term,
+            }))
+        }
     }
 
     async fn append_entries(

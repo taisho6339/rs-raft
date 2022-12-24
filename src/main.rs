@@ -8,7 +8,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use crate::client::RaftServiceClient;
 
-use crate::raft::{RaftConsensusState, RaftReconciler};
+use crate::raft::{ClusterInfo, RaftConsensusState, RaftReconciler};
 use crate::server::{RaftServerConfig, RaftServerDaemon};
 
 mod raft;
@@ -20,7 +20,7 @@ mod rsraft;
 //     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
 // }
 
-async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, server_config: RaftServerConfig, hosts: Vec<&'static str>) -> Result<()> {
+async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: &'static str, other_hosts: Vec<&'static str>, server_config: RaftServerConfig) -> Result<()> {
     let (tx, rx) = watch::channel(());
     let rx1 = rx.clone();
     let rx2 = rx.clone();
@@ -33,8 +33,9 @@ async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, ser
         let _ = server.start_server(rx1, raft_state1).await;
     });
 
-    let client = RaftServiceClient::new(hosts).await;
-    let mut reconciler = RaftReconciler::new(rx2, node_id.clone(), raft_state2, client);
+    let client = RaftServiceClient::new(other_hosts.clone()).await;
+    let cluster_info = ClusterInfo::new(node_id, other_hosts.clone());
+    let mut reconciler = RaftReconciler::new(rx2, cluster_info, raft_state2, client);
     let r = tokio::spawn(async move {
         let _ = reconciler.reconcile_loop().await;
     });
@@ -69,8 +70,9 @@ async fn main() -> Result<()> {
             }
         }
     };
-    let peers = vec!["http://localhost:8080"];
-    run_process(signal, String::from("localhost:8080"), config, peers).await?;
+    let this_node_id = "localhost:8080";
+    let other_hosts = vec!["http://localhost:8080"];
+    run_process(signal, this_node_id, other_hosts, config).await?;
 
     Ok(())
 }
@@ -111,25 +113,25 @@ mod tests {
         let h1 = tokio::spawn(async move {
             run_process(
                 close_signal_1,
-                String::from("localhost:8070"),
-                server_config_1,
+                "localhost:8070",
                 vec!["http://localhost:8080", "http://localhost:8090"],
+                server_config_1,
             ).await.unwrap();
         });
         let h2 = tokio::spawn(async move {
             run_process(
                 close_signal_2,
-                String::from("localhost:8080"),
-                server_config_2,
+                "localhost:8080",
                 vec!["http://localhost:8070", "http://localhost:8090"],
+                server_config_2,
             ).await.unwrap();
         });
         let h3 = tokio::spawn(async move {
             run_process(
                 close_signal_3,
-                String::from("localhost:8090"),
-                server_config_3,
+                "localhost:8090",
                 vec!["http://localhost:8070", "http://localhost:8080"],
+                server_config_3,
             ).await.unwrap();
         });
 

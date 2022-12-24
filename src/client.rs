@@ -1,7 +1,8 @@
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
-use chrono::Duration;
+
 use tonic::transport::{Channel, Endpoint};
+
 use crate::raft::RaftNodeRole::Candidate;
 use crate::RaftConsensusState;
 use crate::rsraft::raft_client::RaftClient;
@@ -16,7 +17,7 @@ impl RaftServiceClient {
         let mut clients = vec![];
         let peers = hosts.iter().map(|h| h as &str).collect::<Vec<&str>>();
         for p in peers.iter() {
-            let mut client = RaftClient::connect(Endpoint::from_static(p)).await.unwrap();
+            let client = RaftClient::connect(Endpoint::from_static(p)).await.unwrap();
             clients.push(client);
         }
         Self {
@@ -25,7 +26,7 @@ impl RaftServiceClient {
     }
 
     pub fn request_vote(&self, req: RequestVoteRequest, granted_objective: i64, state: Arc<Mutex<RaftConsensusState>>) {
-        for mut c in self.clients.iter() {
+        for c in self.clients.iter() {
             let r = req.clone();
             let mut c1 = c.clone();
             let mut s1 = state.clone();
