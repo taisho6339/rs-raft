@@ -10,7 +10,6 @@ pub struct RequestVoteRequest {
     #[prost(int64, tag = "4")]
     pub last_log_term: i64,
 }
-
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RequestVoteResult {
@@ -19,7 +18,12 @@ pub struct RequestVoteResult {
     #[prost(bool, tag = "2")]
     pub vote_granted: bool,
 }
-
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LogEntry {
+    #[prost(bytes = "vec", tag = "1")]
+    pub payload: ::prost::alloc::vec::Vec<u8>,
+}
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AppendEntriesRequest {
@@ -33,8 +37,9 @@ pub struct AppendEntriesRequest {
     pub prev_log_term: i64,
     #[prost(int64, tag = "5")]
     pub leader_commit_index: i64,
+    #[prost(message, repeated, tag = "6")]
+    pub logs: ::prost::alloc::vec::Vec<LogEntry>,
 }
-
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AppendEntriesResult {
@@ -43,37 +48,32 @@ pub struct AppendEntriesResult {
     #[prost(bool, tag = "2")]
     pub success: bool,
 }
-
 /// Generated client implementations.
 pub mod raft_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-
     #[derive(Debug, Clone)]
     pub struct RaftClient<T> {
         inner: tonic::client::Grpc<T>,
     }
-
     impl RaftClient<tonic::transport::Channel> {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-            where
-                D: std::convert::TryInto<tonic::transport::Endpoint>,
-                D::Error: Into<StdError>,
+        where
+            D: std::convert::TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
         {
             let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
             Ok(Self::new(conn))
         }
     }
-
     impl<T> RaftClient<T>
-        where
-            T: tonic::client::GrpcService<tonic::body::BoxBody>,
-            T::Error: Into<StdError>,
-            T::ResponseBody: Body<Data=Bytes> + Send + 'static,
-            <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
@@ -87,18 +87,18 @@ pub mod raft_client {
             inner: T,
             interceptor: F,
         ) -> RaftClient<InterceptedService<T, F>>
-            where
-                F: tonic::service::Interceptor,
-                T::ResponseBody: Default,
-                T: tonic::codegen::Service<
-                    http::Request<tonic::body::BoxBody>,
-                    Response=http::Response<
-                        <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
-                    >,
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
-                <T as tonic::codegen::Service<
-                    http::Request<tonic::body::BoxBody>,
-                >>::Error: Into<StdError> + Send + Sync,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
         {
             RaftClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -155,13 +155,10 @@ pub mod raft_client {
         }
     }
 }
-
 /// Generated server implementations.
 pub mod raft_server {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-
     use tonic::codegen::*;
-
     /// Generated trait containing gRPC methods that should be implemented for use with RaftServer.
     #[async_trait]
     pub trait Raft: Send + Sync + 'static {
@@ -174,16 +171,13 @@ pub mod raft_server {
             request: tonic::Request<super::AppendEntriesRequest>,
         ) -> Result<tonic::Response<super::AppendEntriesResult>, tonic::Status>;
     }
-
     #[derive(Debug)]
     pub struct RaftServer<T: Raft> {
         inner: _Inner<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
     }
-
     struct _Inner<T>(Arc<T>);
-
     impl<T: Raft> RaftServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
@@ -200,8 +194,8 @@ pub mod raft_server {
             inner: T,
             interceptor: F,
         ) -> InterceptedService<Self, F>
-            where
-                F: tonic::service::Interceptor,
+        where
+            F: tonic::service::Interceptor,
         {
             InterceptedService::new(Self::new(inner), interceptor)
         }
@@ -218,12 +212,11 @@ pub mod raft_server {
             self
         }
     }
-
     impl<T, B> tonic::codegen::Service<http::Request<B>> for RaftServer<T>
-        where
-            T: Raft,
-            B: Body + Send + 'static,
-            B::Error: Into<StdError> + Send + 'static,
+    where
+        T: Raft,
+        B: Body + Send + 'static,
+        B::Error: Into<StdError> + Send + 'static,
     {
         type Response = http::Response<tonic::body::BoxBody>;
         type Error = std::convert::Infallible;
@@ -330,7 +323,6 @@ pub mod raft_server {
             }
         }
     }
-
     impl<T: Raft> Clone for RaftServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
@@ -341,19 +333,16 @@ pub mod raft_server {
             }
         }
     }
-
     impl<T: Raft> Clone for _Inner<T> {
         fn clone(&self) -> Self {
             Self(self.0.clone())
         }
     }
-
     impl<T: std::fmt::Debug> std::fmt::Debug for _Inner<T> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{:?}", self.0)
         }
     }
-
     impl<T: Raft> tonic::server::NamedService for RaftServer<T> {
         const NAME: &'static str = "rsraft.Raft";
     }

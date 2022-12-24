@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
+use chrono::Utc;
 use tokio::sync::watch::Receiver;
 use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
@@ -74,12 +75,25 @@ impl Raft for RaftServerHandler {
         &self,
         request: Request<AppendEntriesRequest>,
     ) -> Result<Response<AppendEntriesResult>, Status> {
-        let reply = AppendEntriesResult {
-            term: 1,
-            success: true,
+        let sc = self.raft_state.clone();
+        let mut state = sc.lock().unwrap();
+        let args = request.get_ref();
+
+        // heartbeat
+        if args.logs.len() == 0 {
+            state.last_heartbeat_time = Utc::now();
+            return Ok(Response::new(AppendEntriesResult {
+                term: state.current_term,
+                success: true,
+            }));
         };
 
-        Ok(Response::new(reply))
+        // append entries
+
+        Ok(Response::new(AppendEntriesResult {
+            term: state.current_term,
+            success: true,
+        }))
     }
 }
 

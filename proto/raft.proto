@@ -13,12 +13,17 @@ message RequestVoteResult {
   bool vote_granted = 2;
 }
 
+message LogEntry {
+  bytes payload = 1;
+}
+
 message AppendEntriesRequest {
   int64 term = 1;
   string leader_id = 2;
   int64 prev_log_index = 3;
   int64 prev_log_term = 4;
   int64 leader_commit_index = 5;
+  repeated LogEntry logs = 6;
 }
 
 message AppendEntriesResult {

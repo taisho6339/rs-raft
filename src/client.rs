@@ -1,14 +1,14 @@
 use std::borrow::BorrowMut;
-use std::fmt::format;
 use std::sync::{Arc, Mutex};
 
 use tonic::transport::{Channel, Endpoint};
 
+use crate::RaftConsensusState;
 use crate::raft::RaftNodeRole::Candidate;
-use crate::{ClusterInfo, RaftConsensusState};
+use crate::rsraft::{AppendEntriesRequest, RequestVoteRequest};
 use crate::rsraft::raft_client::RaftClient;
-use crate::rsraft::RequestVoteRequest;
 
+#[derive(Clone)]
 pub struct RaftServiceClient {
     clients: Vec<RaftClient<Channel>>,
 }
@@ -26,12 +26,29 @@ impl RaftServiceClient {
         }
     }
 
-    pub fn request_vote(&self, req: RequestVoteRequest, time_out_millis: i64, cluster_info: &ClusterInfo, state: Arc<Mutex<RaftConsensusState>>) {
+    pub fn heartbeats(&self, req: AppendEntriesRequest, time_out_millis: u64) {
+        for c in self.clients.iter() {
+            let r = req.clone();
+            let mut c1 = c.clone();
+            tokio::spawn(async move {
+                let mut request = tonic::Request::new(r);
+                request.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
+                let response = c1.append_entries(request).await;
+                match response {
+                    Ok(_) => {}
+                    Err(e) => {
+                        println!("[INFO] heartbeats failed, code: {}, message: {}", e.code(), e.message());
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn request_vote(&self, req: RequestVoteRequest, time_out_millis: i64, state: Arc<Mutex<RaftConsensusState>>) {
         for c in self.clients.iter() {
             let r = req.clone();
             let mut c1 = c.clone();
             let mut s1 = state.clone();
-            let granted_objective = (cluster_info.other_hosts.len() + 1) as i64;
             tokio::spawn(async move {
                 let mut request = tonic::Request::new(r);
                 request.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
@@ -51,11 +68,6 @@ impl RaftServiceClient {
                     if message.vote_granted {
                         s.received_granted += 1;
                     }
-                    if 2 * s.received_granted >= granted_objective {
-                        println!("[INFO] Become the Leader");
-                        s.become_leader();
-                    }
-                    return;
                 };
             });
         }
