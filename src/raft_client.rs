@@ -28,6 +28,7 @@ impl RaftServiceClient {
         let mut request = tonic::Request::new(r);
         request.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
         let response = c.request_vote(request).await;
+
         if response.is_err() {
             return None;
         }
@@ -35,19 +36,16 @@ impl RaftServiceClient {
         Some(result)
     }
 
-    pub fn append_entries(&self, peer_index: usize, req: AppendEntriesRequest, time_out_millis: u64, ch: Sender<Option<AppendEntriesResult>>) {
+    pub async fn append_entries(&self, peer_index: usize, req: AppendEntriesRequest, time_out_millis: u64) -> Option<(usize, AppendEntriesResult)> {
         let mut c = self.clients[peer_index].clone();
         let mut r = tonic::Request::new(req);
         r.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
-        tokio::spawn(async move {
-            let response = c.append_entries(r).await;
-            if response.is_err() {
-                ch.send(None).unwrap();
-            } else {
-                let message = response.unwrap();
-                ch.send(Some(message.into_inner())).unwrap();
-            }
-        });
+        let response = c.append_entries(r).await;
+        if response.is_err() {
+            return None;
+        }
+        let message = response.unwrap();
+        Some((peer_index, message.into_inner()))
     }
 
     pub fn heartbeats(&self, req: AppendEntriesRequest, time_out_millis: u64) {

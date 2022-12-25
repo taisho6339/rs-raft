@@ -174,14 +174,13 @@ impl RaftReconciler {
     }
 
     pub fn spawn_append_entries_loop(&mut self) {
-        println!("[INFO] Start append entries loop");
+        println!("[INFO] spawn append entries loop");
         let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
         let other_hosts = self.cluster_info.other_hosts.clone();
         let node_id = self.cluster_info.node_id;
         let mut state_ref = self.state.clone();
-
         tokio::spawn(async move {
             loop {
                 select! {
@@ -197,32 +196,31 @@ impl RaftReconciler {
                             if current_role != Leader {
                                 return;
                             }
-                            reqs = other_hosts.iter()
+                        }
+                        reqs = other_hosts.iter()
                                 .enumerate()
                                 .map(|(i, _)| gen_append_entries_request(i, String::from(node_id), state_ref.clone()))
                                 .collect::<Vec<Option<AppendEntriesRequest>>>();
-                        }
-
-                        for (i, r) in reqs.iter().enumerate() {
+                        let mut futures = FuturesUnordered::new();
+                        reqs.iter().enumerate().for_each(|(i, r)| {
                             if r.is_none() {
-                                continue;
+                                return;
                             }
                             let req = r.clone().unwrap();
-                            let _rsc = rsc.clone();
-                            let mut _state_ref = state_ref.clone();
-                            let (tx, rx) = channel();
-                            _rsc.append_entries(i, req, APPEND_ENTRIES_TICK_DURATION_MILLIS, tx);
-                            let res = rx.await.unwrap();
-                            if res.is_none() {
+                            let fut = rsc.append_entries(i, req, APPEND_ENTRIES_TICK_DURATION_MILLIS);
+                            futures.push(fut);
+                        });
+                        while let Some(opt) = futures.next().await {
+                            if opt.is_none() {
                                 continue;
                             }
-                            let message = res.unwrap();
-                            let mut state = _state_ref.borrow_mut().lock().unwrap();
-                            if state.current_term < message.term {
-                                state.become_follower(message.term);
+                            let (i, result) = opt.unwrap();
+                            let mut state = state_ref.borrow_mut().lock().unwrap();
+                            if state.current_term < result.term {
+                                state.become_follower(result.term);
                                 continue;
                             }
-                            if message.success {
+                            if result.success {
                                 state.next_indexes[i] = state.logs.len() as i64;
                                 state.match_indexes[i] = (state.logs.len() - 1) as i64;
                             } else {
