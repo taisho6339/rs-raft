@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::select;
-use tokio::sync::oneshot::channel;
 use tokio::sync::watch::Receiver;
 use tokio::time::interval;
 
@@ -46,8 +45,8 @@ pub fn gen_append_entries_request(index: usize, node_id: String, state: Arc<Mute
             prev_log_index = next_index - 1;
             prev_log_term = logs[prev_log_index as usize].term;
         } else {
-            prev_log_index = 0;
-            prev_log_term = 0;
+            prev_log_index = -1;
+            prev_log_term = -1;
         }
         term = _state.current_term;
         leader_id = String::from(node_id);
@@ -118,8 +117,7 @@ impl RaftReconciler {
 
     fn become_leader(&mut self) {
         let mut state = self.state.borrow_mut().lock().unwrap();
-        state.become_leader();
-        state.current_leader_id = String::from(self.cluster_info.node_id);
+        state.become_leader(String::from(self.cluster_info.node_id));
     }
 
     fn become_candidate(&mut self) {
@@ -173,9 +171,9 @@ impl RaftReconciler {
         });
     }
 
-    pub fn spawn_append_entries_loop(&mut self) {
+    pub fn spawn_append_entries_loop(&mut self, timeout_millis: u64) {
         println!("[INFO] spawn append entries loop");
-        let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS));
+        let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS as u64));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
         let other_hosts = self.cluster_info.other_hosts.clone();
@@ -207,7 +205,7 @@ impl RaftReconciler {
                                 return;
                             }
                             let req = r.clone().unwrap();
-                            let fut = rsc.append_entries(i, req, APPEND_ENTRIES_TICK_DURATION_MILLIS);
+                            let fut = rsc.append_entries(i, req, timeout_millis);
                             futures.push(fut);
                         });
                         while let Some(opt) = futures.next().await {
@@ -280,7 +278,7 @@ impl RaftReconciler {
             println!("[INFO] Become the Leader");
             self.become_leader();
             self.spawn_heartbeat_loop();
-            self.spawn_append_entries_loop();
+            self.spawn_append_entries_loop(APPEND_ENTRIES_TICK_DURATION_MILLIS);
         }
     }
 

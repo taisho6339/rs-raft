@@ -120,9 +120,11 @@ impl RaftConsensusState {
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
     }
 
-    pub(crate) fn become_leader(&mut self) {
+    pub(crate) fn become_leader(&mut self, leader_id: String) {
         self.voted_for = String::from("");
         self.received_granted = 0;
         self.current_role = RaftNodeRole::Leader;
+        self.current_leader_id = leader_id;
+        // TODO: next index and match index
     }
 }

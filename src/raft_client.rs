@@ -1,4 +1,3 @@
-use tokio::sync::oneshot::Sender;
 use tonic::transport::{Channel, Endpoint};
 
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest, RequestVoteResult};

@@ -7,7 +7,7 @@ use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
 
 use crate::raft_state::RaftConsensusState;
-use crate::raft_state::RaftNodeRole::Dead;
+use crate::raft_state::RaftNodeRole::{Dead, Follower};
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;
@@ -45,14 +45,12 @@ impl Raft for RaftServerHandler {
         if s.current_role == Dead {
             return Err(Status::new(Code::Unavailable, "This node is dead"));
         }
-
         let args = request.get_ref();
         if args.term > s.current_term {
             s.become_follower(args.term);
         }
-
-        // FIXME:
-        let (last_log_term, last_log_index) = (0, 0);
+        let last_log_index = s.last_index();
+        let last_log_term = s.last_log_term();
         let acceptable = args.term == s.current_term &&
             (args.candidate_id == s.voted_for || s.voted_for == "") &&
             (args.last_log_term > last_log_term || (args.last_log_term == last_log_term && args.last_log_index >= last_log_index));
@@ -78,13 +76,23 @@ impl Raft for RaftServerHandler {
         let sc = self.raft_state.clone();
         let mut state = sc.lock().unwrap();
         let args = request.get_ref();
+        if state.current_term > args.term {
+            return Ok(Response::new(AppendEntriesResult {
+                term: state.current_term,
+                success: false,
+            }));
+        }
 
-        // heartbeat
+        if state.current_role != Follower {
+            state.become_follower(args.term);
+        }
         state.last_heartbeat_time = Utc::now();
         state.current_leader_id = args.leader_id.clone();
         if state.commit_index < args.leader_commit_index {
             state.commit_index = args.leader_commit_index;
         }
+
+        // heartbeat
         if args.logs.len() == 0 {
             return Ok(Response::new(AppendEntriesResult {
                 term: state.current_term,
@@ -93,6 +101,30 @@ impl Raft for RaftServerHandler {
         };
 
         // append entries
+        if args.prev_log_index < 0 {
+            state.logs.extend(args.logs.clone());
+            return Ok(Response::new(AppendEntriesResult {
+                term: state.current_term,
+                success: true,
+            }));
+        }
+        if ((state.logs.len() - 1) as i64) < args.prev_log_index {
+            return Ok(Response::new(AppendEntriesResult {
+                term: state.current_term,
+                success: false,
+            }));
+        }
+        let prev_log = state.logs[args.prev_log_index as usize].clone();
+        if prev_log.term != args.term {
+            return Ok(Response::new(AppendEntriesResult {
+                term: state.current_term,
+                success: false,
+            }));
+        }
+
+        // Overwrite
+        // let logs = &args.logs.clone()[..];
+        // std::mem::replace(&mut state.logs[args.prev_log_index as usize..], logs[..]);
 
         Ok(Response::new(AppendEntriesResult {
             term: state.current_term,
