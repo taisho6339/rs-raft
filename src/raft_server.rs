@@ -82,6 +82,9 @@ impl Raft for RaftServerHandler {
         // heartbeat
         state.last_heartbeat_time = Utc::now();
         state.current_leader_id = args.leader_id.clone();
+        if state.commit_index < args.leader_commit_index {
+            state.commit_index = args.leader_commit_index;
+        }
         if args.logs.len() == 0 {
             return Ok(Response::new(AppendEntriesResult {
                 term: state.current_term,

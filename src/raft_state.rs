@@ -90,6 +90,14 @@ impl RaftConsensusState {
         }
     }
 
+    pub(crate) fn last_log_term(&self) -> i64 {
+        let last_index = self.last_index();
+        if last_index < 0 {
+            return -1;
+        }
+        self.logs[last_index as usize].term
+    }
+
     pub(crate) fn last_index(&self) -> i64 {
         self.logs.len() as i64 - 1
     }
@@ -104,7 +112,7 @@ impl RaftConsensusState {
     }
 
     pub(crate) fn become_candidate(&mut self) {
-        // self.voted_for = sel
+        self.voted_for = String::from("");
         self.current_term += 1;
         self.current_role = RaftNodeRole::Candidate;
         self.received_granted = 1;

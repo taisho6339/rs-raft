@@ -1,17 +1,17 @@
 use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
-use std::thread::current;
 
-use chrono::{DateTime, Duration, Utc};
-use rand::{Rng, thread_rng};
+use chrono::Utc;
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::select;
+use tokio::sync::oneshot::channel;
 use tokio::sync::watch::Receiver;
 use tokio::time::interval;
 
 use crate::{ClusterInfo, RaftConsensusState};
 use crate::raft_client::RaftServiceClient;
 use crate::raft_state::RaftNodeRole;
-use crate::raft_state::RaftNodeRole::Leader;
+use crate::raft_state::RaftNodeRole::{Candidate, Leader};
 use crate::rsraft::{AppendEntriesRequest, LogEntry, RequestVoteRequest};
 
 const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
@@ -27,11 +27,11 @@ pub struct RaftReconciler {
 
 pub fn gen_append_entries_request(index: usize, node_id: String, state: Arc<Mutex<RaftConsensusState>>) -> Option<AppendEntriesRequest> {
     let mut state_ref = state.clone();
-    let mut term;
-    let mut leader_id;
-    let mut prev_log_index;
-    let mut prev_log_term;
-    let mut leader_commit_index;
+    let term;
+    let leader_id;
+    let prev_log_index;
+    let prev_log_term;
+    let leader_commit_index;
     let mut logs: Vec<LogEntry> = vec![];
     {
         let _state = state_ref.borrow_mut().lock().unwrap();
@@ -73,6 +73,12 @@ impl RaftReconciler {
             state,
             client,
         }
+    }
+
+    fn last_index_and_term(&mut self) -> (i64, i64) {
+        let state = self.state.borrow_mut().lock().unwrap();
+
+        (state.last_index(), state.last_log_term())
     }
 
     fn current_role(&mut self) -> RaftNodeRole {
@@ -122,36 +128,49 @@ impl RaftReconciler {
         state.become_candidate();
     }
 
-    fn reconcile_election_results(&mut self) {
-        let granted_objective = (self.cluster_info.other_hosts.len() + 1) as i64;
-        if 2 * self.received_granted() >= granted_objective {
-            println!("[INFO] Become the Leader");
-            self.become_leader();
-            self.spawn_heartbeat_loop();
-            self.spawn_append_entries_loop();
-        }
-    }
-
-    fn reconcile_election_timeout(&mut self) {
-        let now = Utc::now();
-        let election_timeout_millis = self.election_timeout_millis();
-        let last_heartbeat_time = self.last_heartbeat_time_millis();
-        let duration = now.timestamp_millis() - last_heartbeat_time;
+    pub fn spawn_request_votes(&mut self, timeout_millis: i64) {
+        println!("[INFO] spawn request votes");
         let current_term = self.current_term();
-        if duration > election_timeout_millis {
-            self.become_candidate();
-            let state_ref = self.state.clone();
-            self.client.request_vote(RequestVoteRequest {
-                candidate_id: String::from(self.cluster_info.node_id),
-                term: current_term,
-                last_log_index: 0,
-                last_log_term: 0,
-            }, election_timeout_millis, state_ref);
-        }
-    }
-
-    fn reconcile_commit_index(&mut self) {
-        self.update_commit_index();
+        let (last_log_index, last_log_term) = self.last_index_and_term();
+        let req = RequestVoteRequest {
+            candidate_id: String::from(self.cluster_info.node_id),
+            term: current_term,
+            last_log_index,
+            last_log_term,
+        };
+        let state_ref = self.state.clone();
+        let c = self.client.clone();
+        let hosts = self.cluster_info.other_hosts.clone();
+        tokio::spawn(async move {
+            let mut futures = FuturesUnordered::new();
+            hosts.iter().enumerate().for_each(|(i, _)| {
+                let fut = c.request_vote(i, req.clone(), timeout_millis);
+                futures.push(fut);
+            });
+            loop {
+                match futures.next().await {
+                    Some(result) => {
+                        let mut _state_ref = state_ref.clone();
+                        let mut state = _state_ref.borrow_mut().lock().unwrap();
+                        if state.current_role != Candidate {
+                            return;
+                        }
+                        let result = result.unwrap();
+                        if result.term > state.current_term {
+                            state.become_follower(result.term);
+                            return;
+                        }
+                        if !result.vote_granted {
+                            continue;
+                        }
+                        state.received_granted += 1;
+                    }
+                    None => {
+                        return;
+                    }
+                }
+            }
+        });
     }
 
     pub fn spawn_append_entries_loop(&mut self) {
@@ -183,6 +202,7 @@ impl RaftReconciler {
                                 .map(|(i, _)| gen_append_entries_request(i, String::from(node_id), state_ref.clone()))
                                 .collect::<Vec<Option<AppendEntriesRequest>>>();
                         }
+
                         for (i, r) in reqs.iter().enumerate() {
                             if r.is_none() {
                                 continue;
@@ -190,25 +210,24 @@ impl RaftReconciler {
                             let req = r.clone().unwrap();
                             let _rsc = rsc.clone();
                             let mut _state_ref = state_ref.clone();
-                            tokio::spawn(async move {
-                                let res = _rsc.append_entries(i, req, APPEND_ENTRIES_TICK_DURATION_MILLIS).await;
-                                if res.is_err() {
-                                    return;
-                                }
-                                let res = res.unwrap();
-                                let message = res.get_ref();
-                                let mut state = _state_ref.borrow_mut().lock().unwrap();
-                                if state.current_term < message.term {
-                                    state.become_follower(message.term);
-                                    return;
-                                }
-                                if message.success {
-                                    state.next_indexes[i] = state.logs.len() as i64;
-                                    state.match_indexes[i] = (state.logs.len() - 1 ) as i64;
-                                } else {
-                                    state.next_indexes[i] -= 1;
-                                }
-                            });
+                            let (tx, rx) = channel();
+                            _rsc.append_entries(i, req, APPEND_ENTRIES_TICK_DURATION_MILLIS, tx);
+                            let res = rx.await.unwrap();
+                            if res.is_none() {
+                                continue;
+                            }
+                            let message = res.unwrap();
+                            let mut state = _state_ref.borrow_mut().lock().unwrap();
+                            if state.current_term < message.term {
+                                state.become_follower(message.term);
+                                continue;
+                            }
+                            if message.success {
+                                state.next_indexes[i] = state.logs.len() as i64;
+                                state.match_indexes[i] = (state.logs.len() - 1) as i64;
+                            } else {
+                                state.next_indexes[i] -= 1;
+                            }
                         }
                     }
                 }
@@ -255,6 +274,31 @@ impl RaftReconciler {
                 }
             }
         });
+    }
+
+    fn reconcile_election_results(&mut self) {
+        let granted_objective = (self.cluster_info.other_hosts.len() + 1) as i64;
+        if 2 * self.received_granted() >= granted_objective {
+            println!("[INFO] Become the Leader");
+            self.become_leader();
+            self.spawn_heartbeat_loop();
+            self.spawn_append_entries_loop();
+        }
+    }
+
+    fn reconcile_election_timeout(&mut self) {
+        let now = Utc::now();
+        let election_timeout_millis = self.election_timeout_millis();
+        let last_heartbeat_time = self.last_heartbeat_time_millis();
+        let duration = now.timestamp_millis() - last_heartbeat_time;
+        if duration > election_timeout_millis {
+            self.become_candidate();
+            self.spawn_request_votes(election_timeout_millis);
+        }
+    }
+
+    fn reconcile_commit_index(&mut self) {
+        self.update_commit_index();
     }
 
     pub async fn reconcile_loop(&mut self) {
