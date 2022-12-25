@@ -1,11 +1,13 @@
 use std::borrow::BorrowMut;
+use std::fmt::format;
 use std::sync::{Arc, Mutex};
+use tonic::Response;
 
 use tonic::transport::{Channel, Endpoint};
 
 use crate::raft_state::RaftConsensusState;
 use crate::raft_state::RaftNodeRole::Candidate;
-use crate::rsraft::{AppendEntriesRequest, RequestVoteRequest};
+use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest};
 use crate::rsraft::raft_client::RaftClient;
 
 #[derive(Clone)]
@@ -24,6 +26,22 @@ impl RaftServiceClient {
         Self {
             clients,
         }
+    }
+
+    pub async fn append_entries(&self, peer_index: usize, req: AppendEntriesRequest, time_out_millis: u64) -> Result<Response<AppendEntriesResult>, ()> {
+        // 最初は自分のlast log + 1
+        // ※client-sideはsuccessがfalseでも受け取ったタイミングでreceived timeを更新する
+        // crashからrecoveryしたときにcommitIndexを把握する方法はある？ <= 新リーダが教えてくれる？
+        // heartbeatでcommitIndexをみて自分のcommitIndexを更新できる
+        let mut c = self.clients[peer_index].clone();
+        let mut r = tonic::Request::new(req);
+        r.metadata_mut().insert("grpc-timeout", format!("{}m", time_out_millis).parse().unwrap());
+        let response = c.append_entries(r).await;
+        if response.is_err() {
+            return Err(());
+        }
+        let message = response.unwrap();
+        Ok(message)
     }
 
     pub fn heartbeats(&self, req: AppendEntriesRequest, time_out_millis: u64) {

@@ -14,7 +14,8 @@ message RequestVoteResult {
 }
 
 message LogEntry {
-  bytes payload = 1;
+  int64 term = 1;
+  bytes payload = 2;
 }
 
 message AppendEntriesRequest {

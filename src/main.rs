@@ -44,6 +44,7 @@ async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: &'static st
 
     {
         let mut state = raft_state.borrow_mut().lock().unwrap();
+        state.initialize_indexes(other_hosts.len());
         state.become_follower(0);
     }
 

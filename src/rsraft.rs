@@ -21,7 +21,9 @@ pub struct RequestVoteResult {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LogEntry {
-    #[prost(bytes = "vec", tag = "1")]
+    #[prost(int64, tag = "1")]
+    pub term: i64,
+    #[prost(bytes = "vec", tag = "2")]
     pub payload: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
