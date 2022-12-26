@@ -82,7 +82,7 @@ impl Raft for RaftServerHandler {
                 success: false,
             }));
         }
-        if state.current_role != Follower {
+        if state.current_role != Follower || state.current_term < args.term {
             state.become_follower(args.term);
         }
 

@@ -125,7 +125,18 @@ impl RaftConsensusState {
         self.received_granted = 0;
         self.current_role = RaftNodeRole::Leader;
         self.current_leader_id = leader_id;
-        // TODO: next index and match index
+        self.next_indexes = self.next_indexes.iter().map(|_| self.logs.len() as i64).collect::<Vec<i64>>();
+        self.match_indexes = self.match_indexes.iter().map(|_| 0).collect();
+    }
+
+    pub(crate) fn update_commit_index(&mut self) {
+        let mut indexes = self.match_indexes.clone();
+        indexes.push(self.last_index());
+        indexes.sort_by(|a, b| a.cmp(b));
+        let mid_index = indexes.len() / 2;
+        if self.commit_index < indexes[mid_index] {
+            self.commit_index = indexes[mid_index];
+        }
     }
 
     pub(crate) fn apply_heartbeat_result(&mut self, result: AppendEntriesResult) {

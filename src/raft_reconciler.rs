@@ -55,11 +55,7 @@ impl RaftReconciler {
     fn update_commit_index(&mut self) {
         let mut state_ref = self.state.clone();
         let mut state = state_ref.borrow_mut().lock().unwrap();
-        let mut indexes = state.match_indexes.clone();
-        indexes.push(state.last_index());
-        indexes.sort_by(|a, b| a.cmp(b));
-        let mid_index = indexes.len() / 2;
-        state.commit_index = indexes[mid_index];
+        state.update_commit_index();
     }
 
     fn become_leader(&mut self) {
