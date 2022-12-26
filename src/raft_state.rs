@@ -111,8 +111,8 @@ impl RaftConsensusState {
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
     }
 
-    pub(crate) fn become_candidate(&mut self) {
-        self.voted_for = String::from("");
+    pub(crate) fn become_candidate(&mut self, node_id: String) {
+        self.voted_for = node_id;
         self.current_term += 1;
         self.current_role = RaftNodeRole::Candidate;
         self.received_granted = 1;

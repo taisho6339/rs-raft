@@ -42,11 +42,16 @@ message CommandRequest {
 message CommandResult {
   bool success = 1;
 }
+message LogsRequest {}
+message LogsResult {
+  repeated LogEntry logs = 1;
+}
 
 service Raft {
   // TODO: Separate these rpc from Raft service because they are for the testing purpose
   rpc Command(CommandRequest) returns (CommandResult);
   rpc Leader(LeaderRequest) returns (LeaderResult);
+  rpc Logs(LogsRequest) returns (LogsResult);
 
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResult);
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResult);

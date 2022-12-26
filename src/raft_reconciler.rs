@@ -64,13 +64,15 @@ impl RaftReconciler {
     }
 
     fn become_candidate(&mut self) {
+        let node_id = self.cluster_info.node_id.clone();
         let mut state = self.state.borrow_mut().lock().unwrap();
-        println!("[INFO] Become a candidate on term: {}", state.current_term);
-        state.become_candidate();
+        println!("[INFO] Become a candidate on term: {}, {}", state.current_term, node_id);
+        state.become_candidate(node_id);
     }
 
     pub fn spawn_request_votes(&mut self, timeout_millis: u64) {
-        println!("[INFO] spawn request votes");
+        let node_id = self.cluster_info.node_id.clone();
+        println!("[INFO] spawn request votes: {}", node_id);
         let mut ch = self.signal.clone();
         let c = self.client.clone();
         let state_clone = self.state.clone();
@@ -89,7 +91,8 @@ impl RaftReconciler {
     }
 
     pub fn spawn_append_entries_loop(&mut self, timeout_millis: u64) {
-        println!("[INFO] Start append entries loop");
+        let node_id = self.cluster_info.node_id.clone();
+        println!("[INFO] Start append entries loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS as u64));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
@@ -101,7 +104,7 @@ impl RaftReconciler {
                         return;
                     }
                     _ = interval.tick() => {
-                        println!("[INFO] Sending Append Entries requests...");
+                        println!("[INFO] Sending Append Entries requests...: {}", node_id);
                         {
                             let current_role;
                             let mut state_clone = state_clone.clone();
@@ -119,7 +122,8 @@ impl RaftReconciler {
     }
 
     pub fn spawn_heartbeat_loop(&mut self) {
-        println!("[INFO] Start heart beat loop");
+        let node_id = self.cluster_info.node_id.clone();
+        println!("[INFO] Start heart beat loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(HEART_BEAT_TICK_DURATION_MILLIS));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
@@ -132,7 +136,7 @@ impl RaftReconciler {
                         return;
                     }
                     _ = interval.tick() => {
-                        println!("[INFO] Sending heartbeats...");
+                        println!("[INFO] Sending heartbeats...: {}", node_id);
                         {
                             let current_role;
                             let mut state_clone = state_clone.clone();
@@ -151,7 +155,7 @@ impl RaftReconciler {
     fn reconcile_election_results(&mut self) {
         let granted_objective = (self.cluster_info.other_hosts.len() + 1) as i64;
         if 2 * self.received_granted() >= granted_objective {
-            println!("[INFO] Become the Leader");
+            println!("[INFO] Become the Leader: {}", self.cluster_info.node_id.clone());
             self.become_leader();
             self.spawn_heartbeat_loop();
             self.spawn_append_entries_loop(APPEND_ENTRIES_TICK_DURATION_MILLIS);
@@ -174,13 +178,14 @@ impl RaftReconciler {
     }
 
     pub async fn reconcile_loop(&mut self) {
-        println!("[INFO] Start reconcile loop");
+        let node_id = self.cluster_info.node_id.clone();
+        println!("[INFO] Start reconcile loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(RECONCILE_TICK_DURATION_MILLIS));
         let mut ch = self.signal.clone();
         loop {
             select! {
                 _ = ch.changed() => {
-                    println!("[INFO] Shutting down reconcile loop...");
+                    println!("[INFO] Shutting down reconcile loop...: {}", node_id);
                     return;
                 }
                 _ = interval.tick() => {
@@ -190,15 +195,15 @@ impl RaftReconciler {
                             println!("[INFO] Dead");
                         }
                         RaftNodeRole::Leader => {
-                            println!("[INFO] Reconcile Leader");
+                            println!("[INFO] Reconcile Leader: {}", node_id);
                             self.reconcile_commit_index();
                         }
                         RaftNodeRole::Follower => {
-                            println!("[INFO] Reconcile Follower");
+                            println!("[INFO] Reconcile Follower: {}", node_id);
                             self.reconcile_election_timeout();
                         }
                         RaftNodeRole::Candidate => {
-                            println!("[INFO] Reconcile Candidate");
+                            println!("[INFO] Reconcile Candidate: {}", node_id);
                             self.reconcile_election_timeout();
                             self.reconcile_election_results();
                         }

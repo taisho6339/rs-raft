@@ -82,96 +82,105 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::format;
-    use std::pin::Pin;
-    use std::thread::sleep;
     use std::time::Duration;
-    use futures::future::join_all;
 
-    use tokio::sync::watch::{channel, Receiver};
+    use tokio::sync::watch::channel;
+    use tonic::transport::Endpoint;
+
+    use crate::rsraft::{CommandRequest, LeaderRequest, LogsRequest};
+    use crate::rsraft::raft_client::RaftClient;
 
     use super::*;
 
-    fn gen_process(rx: Receiver<()>, port: u16, other_hosts: Vec<&'static str>) -> Pin<Box<dyn Future<Output=Result<()>>>> {
-        let mut rx1 = rx.clone();
-        let close_signal = async move {
-            rx1.changed().await.unwrap();
-        };
-        let server_config = RaftServerConfig {
-            port,
-        };
-        Box::pin(run_process(
-            close_signal,
-            format!("localhost:{}", port),
-            other_hosts,
-            server_config,
-        ))
+    async fn get_leader_host() -> String {
+        let mut client = RaftClient::connect(Endpoint::from_static("http://localhost:8070")).await.unwrap();
+        let leader;
+        loop {
+            let r = tonic::Request::new(LeaderRequest {});
+            let res = client.leader(r).await.unwrap();
+            let message = res.get_ref();
+            if message.leader.len() > 0 {
+                leader = format!("http://{}", message.leader.clone());
+                break;
+            }
+        }
+        leader
+    }
+
+    fn read_le_u64(input: &mut &[u8]) -> u64 {
+        let (int_bytes, rest) = input.split_at(std::mem::size_of::<u64>());
+        *input = rest;
+        u64::from_le_bytes(int_bytes.try_into().unwrap())
+    }
+
+    async fn assert_single_leader() {
+        let hosts = vec!["http://localhost:8070", "http://localhost:8080", "http://localhost:8090"];
+        let mut results = vec![];
+        for h in hosts.iter() {
+            let mut client = RaftClient::connect(Endpoint::from_static(h)).await.unwrap();
+            let r = tonic::Request::new(LeaderRequest {});
+            let res = client.leader(r).await.unwrap();
+            let message = res.get_ref();
+            results.push(message.leader.clone());
+        }
+        let mut buf = vec![];
+        for res in results.iter() {
+            if !buf.contains(res) {
+                buf.push(res.clone());
+            }
+        }
+        assert_eq!(buf.len(), 1);
+    }
+
+    async fn assert_commit_log() {
+        let hosts = vec!["http://localhost:8070", "http://localhost:8080", "http://localhost:8090"];
+        // let mut results = vec![];
+        for h in hosts.iter() {
+            let mut client = RaftClient::connect(Endpoint::from_static(h)).await.unwrap();
+            let r = tonic::Request::new(LogsRequest {});
+            let res = client.logs(r).await.unwrap();
+            let message = res.get_ref();
+            let mut payload = message.logs[0].payload.as_slice();
+            let value = read_le_u64(&mut payload);
+            println!("{}", value);
+        }
     }
 
     #[tokio::test]
     async fn test() {
         let (tx, rx) = channel(());
-        let p1 = gen_process(rx.clone(), 8070, vec!["http://localhost:8080", "http://localhost:8090"]);
-        let p2 = gen_process(rx.clone(), 8080, vec!["http://localhost:8070", "http://localhost:8090"]);
-        let p3 = gen_process(rx.clone(), 8090, vec!["http://localhost:8070", "http://localhost:8080"]);
-
+        let mut rx1 = rx.clone();
+        let mut rx2 = rx.clone();
+        let mut rx3 = rx.clone();
         let r1 = tokio::spawn(async move {
-            p1.await.unwrap();
+            let server_config = RaftServerConfig { port: 8070 };
+            let _ = run_process(async move { let _ = rx1.changed().await; }, format!("localhost:{}", 8070), vec!["http://localhost:8080", "http://localhost:8090"], server_config)
+                .await;
         });
         let r2 = tokio::spawn(async move {
-            p2.await.unwrap();
+            let server_config = RaftServerConfig { port: 8080 };
+            let _ = run_process(async move { let _ = rx2.changed().await; }, format!("localhost:{}", 8080), vec!["http://localhost:8070", "http://localhost:8090"], server_config)
+                .await;
         });
         let r3 = tokio::spawn(async move {
-            p3.await.unwrap();
+            let server_config = RaftServerConfig { port: 8090 };
+            let _ = run_process(async move { let _ = rx3.changed().await; }, format!("localhost:{}", 8090), vec!["http://localhost:8070", "http://localhost:8080"], server_config)
+                .await;
         });
 
-        // let mut rx1 = rx.clone();
-        // let mut rx2 = rx.clone();
-        // let mut rx3 = rx.clone();
-        // let close_signal_1 = async move {
-        //     rx1.changed().await.unwrap();
-        // };
-        // let close_signal_2 = async move {
-        //     rx2.changed().await.unwrap();
-        // };
-        // let close_signal_3 = async move {
-        //     rx3.changed().await.unwrap();
-        // };
-        // let server_config_1 = RaftServerConfig {
-        //     port: 8070,
-        // };
-        // let server_config_2 = RaftServerConfig {
-        //     port: 8080,
-        // };
-        // let server_config_3 = RaftServerConfig {
-        //     port: 8090,
-        // };
-        // let h1 = tokio::spawn(async move {
-        //     run_process(
-        //         close_signal_1,
-        //         String::from("localhost:8070"),
-        //         vec!["http://localhost:8080", "http://localhost:8090"],
-        //         server_config_1,
-        //     ).await.unwrap();
-        // });
-        // let h2 = tokio::spawn(async move {
-        //     run_process(
-        //         close_signal_2,
-        //         "localhost:8080",
-        //         vec!["http://localhost:8070", "http://localhost:8090"],
-        //         server_config_2,
-        //     ).await.unwrap();
-        // });
-        // let h3 = tokio::spawn(async move {
-        //     run_process(
-        //         close_signal_3,
-        //         "localhost:8090",
-        //         vec!["http://localhost:8070", "http://localhost:8080"],
-        //         server_config_3,
-        //     ).await.unwrap();
-        // });
+        let leader = get_leader_host().await;
+        assert_single_leader().await;
 
-        tokio::time::sleep(Duration::from_millis(10000)).await;
+        let mut client = RaftClient::connect(leader).await.unwrap();
+        let payload = (1 as u64).to_le_bytes().to_vec();
+        let req = tonic::Request::new(CommandRequest {
+            payload,
+        });
+        let res = client.command(req).await.unwrap();
+        assert_eq!(res.get_ref().success, true);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_commit_log().await;
+
         tx.send(()).unwrap();
         r1.await.unwrap();
         r2.await.unwrap();
