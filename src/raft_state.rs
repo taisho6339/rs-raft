@@ -1,7 +1,7 @@
 use chrono::{DateTime, Duration, Utc};
 use rand::{Rng, thread_rng};
 
-use crate::rsraft::LogEntry;
+use crate::rsraft::{AppendEntriesResult, LogEntry, RequestVoteResult};
 
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
@@ -126,5 +126,36 @@ impl RaftConsensusState {
         self.current_role = RaftNodeRole::Leader;
         self.current_leader_id = leader_id;
         // TODO: next index and match index
+    }
+
+    pub(crate) fn apply_heartbeat_result(&mut self, result: AppendEntriesResult) {
+        if result.term > self.current_term {
+            self.become_follower(result.term);
+            return;
+        }
+    }
+
+    pub(crate) fn apply_request_vote_result(&mut self, result: RequestVoteResult) {
+        if result.term > self.current_term {
+            self.become_follower(result.term);
+            return;
+        }
+        if !result.vote_granted {
+            return;
+        }
+        self.received_granted += 1;
+    }
+
+    pub(crate) fn apply_append_entries_result(&mut self, peer_index: usize, result: AppendEntriesResult) {
+        if self.current_term < result.term {
+            self.become_follower(result.term);
+            return;
+        }
+        if result.success {
+            self.next_indexes[peer_index] = self.logs.len() as i64;
+            self.match_indexes[peer_index] = (self.logs.len() - 1) as i64;
+        } else {
+            self.next_indexes[peer_index] -= 1;
+        }
     }
 }

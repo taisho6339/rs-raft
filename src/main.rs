@@ -35,7 +35,7 @@ async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: &'static st
         let _ = server.start_server(rx1, raft_state1).await;
     });
 
-    let client = RaftServiceClient::new(other_hosts.clone()).await;
+    let client = RaftServiceClient::new(String::from(node_id), other_hosts.clone()).await;
     let cluster_info = ClusterInfo::new(node_id, other_hosts.clone());
     let mut reconciler = RaftReconciler::new(rx2, cluster_info, raft_state2, client);
     let r = tokio::spawn(async move {
