@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -7,8 +8,8 @@ use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
 
 use crate::raft_state::RaftConsensusState;
-use crate::raft_state::RaftNodeRole::{Dead, Follower};
-use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, RequestVoteRequest, RequestVoteResult};
+use crate::raft_state::RaftNodeRole::{Dead, Follower, Leader};
+use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, CommandResult, LeaderRequest, LeaderResult, LogEntry, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;
 
@@ -36,6 +37,33 @@ pub struct RaftServerHandler {
 
 #[tonic::async_trait]
 impl Raft for RaftServerHandler {
+    async fn command(&self, request: Request<CommandRequest>) -> Result<Response<CommandResult>, Status> {
+        let args = request.get_ref();
+        let mut state_clone = self.raft_state.clone();
+        let mut state = state_clone.borrow_mut().lock().unwrap();
+        if state.current_role != Leader {
+            return Ok(Response::new(CommandResult {
+                success: false,
+            }));
+        }
+        let term = state.current_term;
+        state.logs.push(LogEntry {
+            term,
+            payload: args.payload.clone(),
+        });
+        Ok(Response::new(CommandResult {
+            success: true
+        }))
+    }
+
+    async fn leader(&self, _request: Request<LeaderRequest>) -> Result<Response<LeaderResult>, Status> {
+        let mut state_clone = self.raft_state.clone();
+        let state = state_clone.borrow_mut().lock().unwrap();
+        Ok(Response::new(LeaderResult {
+            leader: state.current_leader_id.clone(),
+        }))
+    }
+
     async fn request_vote(
         &self,
         request: Request<RequestVoteRequest>,

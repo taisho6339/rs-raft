@@ -6,12 +6,12 @@ use crate::rsraft::{AppendEntriesResult, LogEntry, RequestVoteResult};
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
 pub struct ClusterInfo {
-    pub node_id: &'static str,
+    pub node_id: String,
     pub other_hosts: Vec<&'static str>,
 }
 
 impl ClusterInfo {
-    pub fn new(node_id: &'static str, hosts: Vec<&'static str>) -> Self {
+    pub fn new(node_id: String, hosts: Vec<&'static str>) -> Self {
         Self {
             node_id,
             other_hosts: hosts,
@@ -136,6 +136,7 @@ impl RaftConsensusState {
         let mid_index = indexes.len() / 2;
         if self.commit_index < indexes[mid_index] {
             self.commit_index = indexes[mid_index];
+            println!("[INFO] commit index updated by {}", self.commit_index);
         }
     }
 

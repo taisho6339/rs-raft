@@ -60,7 +60,7 @@ impl RaftReconciler {
 
     fn become_leader(&mut self) {
         let mut state = self.state.borrow_mut().lock().unwrap();
-        state.become_leader(String::from(self.cluster_info.node_id));
+        state.become_leader(self.cluster_info.node_id.clone());
     }
 
     fn become_candidate(&mut self) {
