@@ -89,7 +89,7 @@ impl RaftReconciler {
     }
 
     pub fn spawn_append_entries_loop(&mut self, timeout_millis: u64) {
-        println!("[INFO] spawn append entries loop");
+        println!("[INFO] Start append entries loop");
         let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS as u64));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
@@ -101,7 +101,7 @@ impl RaftReconciler {
                         return;
                     }
                     _ = interval.tick() => {
-                        println!("[INFO] Append Entries");
+                        println!("[INFO] Sending Append Entries requests...");
                         {
                             let current_role;
                             let mut state_clone = state_clone.clone();
