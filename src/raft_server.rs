@@ -82,10 +82,10 @@ impl Raft for RaftServerHandler {
                 success: false,
             }));
         }
-
         if state.current_role != Follower {
             state.become_follower(args.term);
         }
+
         state.last_heartbeat_time = Utc::now();
         state.current_leader_id = args.leader_id.clone();
         if state.commit_index < args.leader_commit_index {
@@ -108,7 +108,9 @@ impl Raft for RaftServerHandler {
                 success: true,
             }));
         }
-        if ((state.logs.len() - 1) as i64) < args.prev_log_index {
+
+        let last_log_index = state.last_index();
+        if last_log_index < args.prev_log_index {
             return Ok(Response::new(AppendEntriesResult {
                 term: state.current_term,
                 success: false,
@@ -121,10 +123,8 @@ impl Raft for RaftServerHandler {
                 success: false,
             }));
         }
-
         // Overwrite
-        // let logs = &args.logs.clone()[..];
-        // std::mem::replace(&mut state.logs[args.prev_log_index as usize..], logs[..]);
+        state.logs[..=(args.prev_log_index as usize)].to_vec().extend(args.logs.clone());
 
         Ok(Response::new(AppendEntriesResult {
             term: state.current_term,
