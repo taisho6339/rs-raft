@@ -197,6 +197,7 @@ impl RaftReconciler {
                         RaftNodeRole::Leader => {
                             println!("[INFO] Reconcile Leader: {}", node_id);
                             self.reconcile_commit_index();
+                            // TODO: add implementation to apply the state to some storage
                         }
                         RaftNodeRole::Follower => {
                             println!("[INFO] Reconcile Follower: {}", node_id);
