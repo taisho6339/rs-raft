@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::mem::size_of;
 
 use chrono::{DateTime, Duration, Utc};
@@ -284,7 +285,7 @@ impl RaftConsensusState {
         self.last_heartbeat_time = Utc::now();
         self.current_leader_id = req.leader_id.clone();
         if self.commit_index < req.leader_commit_index {
-            self.commit_index = req.leader_commit_index;
+            self.commit_index = min(req.leader_commit_index, self.last_index());
         }
 
         // heartbeat
