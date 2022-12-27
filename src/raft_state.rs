@@ -1,8 +1,10 @@
 use chrono::{DateTime, Duration, Utc};
 use rand::{Rng, thread_rng};
+use crate::inmemory_storage::InMemoryStorage;
 use crate::raft_state::RaftNodeRole::{Follower, Leader};
 
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, LogEntry, RequestVoteRequest, RequestVoteResult};
+use crate::storage::PersistentStateStorage;
 
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
@@ -43,6 +45,8 @@ pub struct RaftConsensusState {
     pub last_applied: i64,
     pub next_indexes: Vec<i64>,
     pub match_indexes: Vec<i64>,
+
+    pub storage: Box<dyn PersistentStateStorage<String, Vec<u8>>>,
 }
 
 impl Default for RaftConsensusState {
@@ -59,6 +63,7 @@ impl Default for RaftConsensusState {
         let logs = vec![];
         let next_indexes = vec![];
         let match_indexes = vec![];
+        let storage = Box::new(InMemoryStorage::new());
 
         Self {
             voted_for,
@@ -73,6 +78,7 @@ impl Default for RaftConsensusState {
             next_indexes,
             match_indexes,
             logs,
+            storage,
         }
     }
 }
@@ -83,6 +89,13 @@ fn randomized_timeout_duration(base_millis: i64) -> Duration {
 }
 
 impl RaftConsensusState {
+    pub(crate) fn new(other_peers_size: usize, storage: Box<dyn PersistentStateStorage<String, Vec<u8>>>) -> Self {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(other_peers_size);
+        state.storage = storage;
+        return state;
+    }
+
     pub(crate) fn initialize_indexes(&mut self, other_peers_size: usize) {
         let length = self.logs.len() as i64;
         for _ in 0..other_peers_size {
@@ -129,6 +142,7 @@ impl RaftConsensusState {
         self.next_indexes = self.next_indexes.iter().map(|_| self.logs.len() as i64).collect::<Vec<i64>>();
         self.match_indexes = self.match_indexes.iter().map(|_| -1).collect();
         self.commit_index = -1;
+        self.last_applied = -1;
     }
 
     pub(crate) fn update_commit_index(&mut self) {

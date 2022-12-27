@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
+use crate::inmemory_storage::InMemoryStorage;
 
 use crate::raft_client::RaftServiceClient;
 use crate::raft_reconciler::RaftReconciler;
@@ -18,6 +19,8 @@ mod raft_server;
 mod raft_client;
 mod rsraft;
 mod util;
+mod storage;
+mod inmemory_storage;
 
 // pub mod rsraft {
 //     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
@@ -45,7 +48,6 @@ async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, oth
     {
         let mut raft_state_clone = raft_state.clone();
         let mut state = raft_state_clone.borrow_mut().lock().unwrap();
-        state.initialize_indexes(other_hosts.len());
         state.become_follower(0);
     }
 
@@ -75,8 +77,8 @@ async fn main() -> Result<()> {
         }
     };
     let this_node_id = "localhost:8080";
-    let other_hosts = vec!["http://localhost:8080"];
-    let state = RaftConsensusState::default();
+    let other_hosts = vec![];
+    let state = RaftConsensusState::new(0, Box::new(InMemoryStorage::new()));
     let raft_state = Arc::new(Mutex::new(state));
     run_process(signal, String::from(this_node_id), other_hosts, config, raft_state).await?;
 
@@ -130,7 +132,6 @@ mod tests {
                     if success {
                         return;
                     }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }
         }
@@ -144,9 +145,9 @@ mod tests {
         let mut rx1_clone = rx.clone();
         let mut rx2_clone = rx.clone();
         let mut rx3_clone = rx.clone();
-        let s1 = Arc::new(Mutex::new(RaftConsensusState::default()));
-        let s2 = Arc::new(Mutex::new(RaftConsensusState::default()));
-        let s3 = Arc::new(Mutex::new(RaftConsensusState::default()));
+        let s1 = Arc::new(Mutex::new(RaftConsensusState::new(2, Box::new(InMemoryStorage::new()))));
+        let s2 = Arc::new(Mutex::new(RaftConsensusState::new(2, Box::new(InMemoryStorage::new()))));
+        let s3 = Arc::new(Mutex::new(RaftConsensusState::new(2, Box::new(InMemoryStorage::new()))));
         let mut states_map = HashMap::new();
         states_map.insert("localhost:8070", s1.clone());
         states_map.insert("localhost:8080", s2.clone());
