@@ -86,17 +86,17 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::thread::sleep;
     use std::time::Duration;
-    use ntest::timeout;
 
+    use ntest::timeout;
     use tokio::sync::watch::channel;
     use tokio::time::interval;
     use tonic::Response;
-    use crate::raft_state::RaftNodeRole::{Dead, Follower, Leader};
 
+    use crate::raft_state::RaftNodeRole::{Dead, Follower, Leader};
     use crate::rsraft::{CommandRequest, CommandResult, LogEntry};
     use crate::rsraft::raft_client::RaftClient;
+    use crate::util::read_le_u64;
 
     use super::*;
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[tokio::test]
     #[timeout(5000)]
-    async fn test() {
+    async fn test_e2e() {
         // Initialize
         let (tx, rx) = channel(());
         let mut rx1_clone = rx.clone();
@@ -198,7 +198,7 @@ mod tests {
                 return false;
             }
             let unified_commit_index = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
-            let unified_logs = s1.logs.eq(&s2.logs) && s1.logs.eq(&s3.logs);
+            let unified_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
             return unified_commit_index && unified_logs;
         }, 1000).await;
         let leader_host = leader_host(s1.clone());
@@ -256,8 +256,13 @@ mod tests {
             let s1 = s1_clone.borrow_mut().lock().unwrap();
             let s2 = s2_clone.borrow_mut().lock().unwrap();
             let s3 = s3_clone.borrow_mut().lock().unwrap();
+            if s1.logs.len() != 3 {
+                return false;
+            }
             let unified_log_size = (s1.logs.len() == s2.logs.len()) && (s1.logs.len() == s3.logs.len());
-            return unified_log_size && (s1.logs == s2.logs) && (s1.logs == s3.logs);
+            let unified_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
+            let value = read_le_u64(&mut s1.logs[2].payload.as_slice());
+            return unified_log_size && unified_logs && value == 3;
         }, 1000).await;
 
         tx.send(()).unwrap();

@@ -83,9 +83,9 @@ fn randomized_timeout_duration(base_millis: i64) -> Duration {
 }
 
 impl RaftConsensusState {
-    pub(crate) fn initialize_indexes(&mut self, peer_size: usize) {
+    pub(crate) fn initialize_indexes(&mut self, other_peers_size: usize) {
         let length = self.logs.len() as i64;
-        for _ in 0..peer_size {
+        for _ in 0..other_peers_size {
             self.next_indexes.push(length);
             self.match_indexes.push(-1);
         }
@@ -127,7 +127,7 @@ impl RaftConsensusState {
         self.current_role = RaftNodeRole::Leader;
         self.current_leader_id = leader_id;
         self.next_indexes = self.next_indexes.iter().map(|_| self.logs.len() as i64).collect::<Vec<i64>>();
-        self.match_indexes = self.match_indexes.iter().map(|_| 0).collect();
+        self.match_indexes = self.match_indexes.iter().map(|_| -1).collect();
         self.commit_index = -1;
     }
 
@@ -244,13 +244,282 @@ impl RaftConsensusState {
 
 #[cfg(test)]
 mod tests {
-    use crate::raft_state::RaftNodeRole::Follower;
+    use crate::raft_state::RaftNodeRole::{Candidate, Follower, Leader};
     use crate::RaftConsensusState;
-    use crate::rsraft::{AppendEntriesRequest, LogEntry};
+    use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, LogEntry, RequestVoteRequest, RequestVoteResult};
     use crate::util::read_le_u64;
 
     #[test]
-    fn test_append_entries() {
+    fn test_initialize_indexes() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        assert_eq!(state.match_indexes, vec![-1, -1]);
+        assert_eq!(state.next_indexes, vec![0, 0]);
+    }
+
+    #[test]
+    fn test_last_log() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_follower(1);
+        assert_eq!(state.last_log_term(), -1);
+        assert_eq!(state.last_index(), -1);
+        let success = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: -1,
+            prev_log_term: -1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (10 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(success, true);
+        assert_eq!(state.last_log_term(), 1);
+        assert_eq!(state.last_index(), 0);
+    }
+
+    #[test]
+    fn test_become_follower() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_follower(1);
+        assert_eq!(state.current_term, 1);
+        assert_eq!(state.current_role, Follower);
+        assert_eq!(state.current_leader_id, String::from(""));
+        assert_eq!(state.voted_for, String::from(""));
+        assert_eq!(state.received_granted, 0);
+        assert_eq!(state.logs, vec![]);
+        assert_eq!(state.commit_index, -1);
+        assert_eq!(state.last_applied, -1);
+        assert_eq!(state.next_indexes, vec![0, 0]);
+        assert_eq!(state.match_indexes, vec![-1, -1]);
+    }
+
+    #[test]
+    fn test_become_candidate() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_candidate(String::from("candidate"));
+        assert_eq!(state.current_term, 1);
+        assert_eq!(state.current_role, Candidate);
+        assert_eq!(state.current_leader_id, String::from(""));
+        assert_eq!(state.voted_for, String::from("candidate"));
+        assert_eq!(state.received_granted, 1);
+        assert_eq!(state.logs, vec![]);
+        assert_eq!(state.commit_index, -1);
+        assert_eq!(state.last_applied, -1);
+        assert_eq!(state.next_indexes, vec![0, 0]);
+        assert_eq!(state.match_indexes, vec![-1, -1]);
+    }
+
+    #[test]
+    fn test_become_leader() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.next_indexes = vec![2, 2];
+        state.match_indexes = vec![1, 1];
+        state.become_leader(String::from("leader"));
+        assert_eq!(state.current_term, 0);
+        assert_eq!(state.current_role, Leader);
+        assert_eq!(state.current_leader_id, String::from("leader"));
+        assert_eq!(state.voted_for, String::from(""));
+        assert_eq!(state.received_granted, 0);
+        assert_eq!(state.logs, vec![]);
+        assert_eq!(state.commit_index, -1);
+        assert_eq!(state.last_applied, -1);
+        assert_eq!(state.next_indexes, vec![0, 0]);
+        assert_eq!(state.match_indexes, vec![-1, -1]);
+    }
+
+    #[test]
+    fn test_update_commit_index() {
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.logs.push(LogEntry {
+            term: 1,
+            payload: (100 as u64).to_le_bytes().to_vec(),
+        });
+        state.logs.push(LogEntry {
+            term: 1,
+            payload: (200 as u64).to_le_bytes().to_vec(),
+        });
+        state.logs.push(LogEntry {
+            term: 1,
+            payload: (300 as u64).to_le_bytes().to_vec(),
+        });
+        state.match_indexes = vec![-1, -1];
+        state.update_commit_index();
+        assert_eq!(state.commit_index, -1);
+
+        state.match_indexes = vec![0, 0];
+        state.update_commit_index();
+        assert_eq!(state.commit_index, 0);
+
+        state.match_indexes = vec![1, 0];
+        state.update_commit_index();
+        assert_eq!(state.commit_index, 1);
+
+        state.match_indexes = vec![2, 0];
+        state.update_commit_index();
+        assert_eq!(state.commit_index, 2);
+
+        // if a calculated commit index is less than current one, no update happens
+        state.match_indexes = vec![0, 0];
+        state.update_commit_index();
+        assert_eq!(state.commit_index, 2);
+    }
+
+    #[test]
+    fn test_apply_heartbeat_result() {
+        // initialize
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_leader(String::from("leader"));
+        state.apply_heartbeat_result(AppendEntriesResult {
+            term: 2,
+            success: false,
+        });
+        assert_eq!(state.current_role, Follower);
+        assert_eq!(state.current_term, 2);
+    }
+
+    #[test]
+    fn test_request_vote_result() {
+        // initialize
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_candidate(String::from("candidate"));
+        state.apply_request_vote_result(RequestVoteResult {
+            term: 2,
+            vote_granted: false,
+        });
+        assert_eq!(state.current_role, Follower);
+        assert_eq!(state.current_term, 2);
+        assert_eq!(state.received_granted, 0);
+
+        state.become_candidate(String::from("candidate"));
+        state.apply_request_vote_result(RequestVoteResult {
+            term: 2,
+            vote_granted: false,
+        });
+        assert_eq!(state.current_role, Candidate);
+        assert_eq!(state.current_term, 3);
+        assert_eq!(state.received_granted, 1);
+
+        state.apply_request_vote_result(RequestVoteResult {
+            term: 2,
+            vote_granted: true,
+        });
+        assert_eq!(state.current_role, Candidate);
+        assert_eq!(state.current_term, 3);
+        assert_eq!(state.received_granted, 2);
+    }
+
+    #[test]
+    fn test_apply_append_entries_result() {
+        // initialize
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_leader(String::from("leader"));
+        state.logs.push(LogEntry {
+            term: 0,
+            payload: (100 as u64).to_le_bytes().to_vec(),
+        });
+        state.apply_append_entries_result(0, AppendEntriesResult {
+            success: true,
+            term: 0,
+        });
+        assert_eq!(state.next_indexes[0], 1);
+        assert_eq!(state.match_indexes[0], 0);
+
+        state.apply_append_entries_result(0, AppendEntriesResult {
+            success: false,
+            term: 0,
+        });
+        assert_eq!(state.next_indexes[0], 0);
+
+        state.apply_append_entries_result(0, AppendEntriesResult {
+            success: false,
+            term: 1,
+        });
+        assert_eq!(state.current_role, Follower);
+        assert_eq!(state.current_term, 1);
+    }
+
+    #[test]
+    fn test_apply_request_vote_request() {
+        // initialize
+        let mut state = RaftConsensusState::default();
+        state.initialize_indexes(2);
+        state.become_follower(1);
+        state.logs.push(
+            LogEntry {
+                term: 0,
+                payload: (150 as u64).to_le_bytes().to_vec(),
+            }
+        );
+        state.logs.push(
+            LogEntry {
+                term: 1,
+                payload: (100 as u64).to_le_bytes().to_vec(),
+            }
+        );
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 0,
+            last_log_term: -1,
+            last_log_index: -1,
+            candidate_id: String::from("candidate"),
+        });
+        assert_eq!(granted, false);
+
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            last_log_term: -1,
+            last_log_index: -1,
+            candidate_id: String::from("candidate"),
+        });
+        assert_eq!(granted, false);
+
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            last_log_term: 1,
+            last_log_index: 0,
+            candidate_id: String::from("candidate"),
+        });
+        assert_eq!(granted, false);
+
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            last_log_term: 1,
+            last_log_index: 1,
+            candidate_id: String::from("candidate"),
+        });
+        assert_eq!(granted, true);
+        assert_eq!(state.voted_for, "candidate");
+
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            last_log_term: 1,
+            last_log_index: 1,
+            candidate_id: String::from("candidate"),
+        });
+        assert_eq!(granted, true);
+
+        let granted = state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            last_log_term: 2,
+            last_log_index: 4,
+            candidate_id: String::from("candidate2"),
+        });
+        assert_eq!(granted, false);
+    }
+
+    #[test]
+    fn test_apply_append_entries_request() {
         // initialize
         let mut state = RaftConsensusState::default();
         state.apply_append_entries_request(&AppendEntriesRequest {
