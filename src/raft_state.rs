@@ -4,7 +4,7 @@ use std::mem::size_of;
 use chrono::{DateTime, Duration, Utc};
 use rand::{Rng, thread_rng};
 
-use crate::inmemory_storage::InMemoryStorage;
+use crate::inmemory_storage::MockInMemoryStorage;
 use crate::raft_state::RaftNodeRole::{Follower, Leader};
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, LogEntry, RequestVoteRequest, RequestVoteResult};
 use crate::storage::PersistentStateStorage;
@@ -109,7 +109,7 @@ impl Default for RaftConsensusState {
         let logs = vec![];
         let next_indexes = vec![];
         let match_indexes = vec![];
-        let storage = Box::new(InMemoryStorage::new());
+        let storage = Box::new(MockInMemoryStorage::new());
 
         Self {
             voted_for,
@@ -327,7 +327,7 @@ impl RaftConsensusState {
 
 #[cfg(test)]
 mod tests {
-    use crate::{InMemoryStorage, RaftConsensusState};
+    use crate::{MockInMemoryStorage, RaftConsensusState};
     use crate::raft_state::RaftNodeRole::{Candidate, Follower, Leader};
     use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, LogEntry, RequestVoteRequest, RequestVoteResult};
     use crate::util::read_le_u64;
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn test_request_vote_result() {
         // initialize
-        let storage = Box::new(InMemoryStorage::new());
+        let storage = Box::new(MockInMemoryStorage::new());
         let mut state = RaftConsensusState::new(2, storage);
         state.become_candidate(String::from("candidate"));
         state.apply_request_vote_result(RequestVoteResult {
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_persistent_storage() {
-        let storage = Box::new(InMemoryStorage::new());
+        let storage = Box::new(MockInMemoryStorage::new());
         let mut state = RaftConsensusState::new(2, storage);
         state.become_follower(1);
         state.apply_request_vote_request(&RequestVoteRequest {
