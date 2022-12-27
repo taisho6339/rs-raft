@@ -8,7 +8,7 @@ use tonic::transport::Server;
 
 use crate::raft_state::RaftConsensusState;
 use crate::raft_state::RaftNodeRole::Dead;
-use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, CommandResult, LeaderRequest, LeaderResult, LogsRequest, LogsResult, RequestVoteRequest, RequestVoteResult};
+use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, CommandResult, LeaderRequest, LeaderResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;
 
@@ -53,14 +53,6 @@ impl Raft for RaftServerHandler {
         Ok(Response::new(LeaderResult {
             leader: state.current_leader_id.clone(),
         }))
-    }
-
-    async fn logs(&self, _request: Request<LogsRequest>) -> Result<Response<LogsResult>, Status> {
-        let mut state_clone = self.raft_state.clone();
-        let state = state_clone.borrow_mut().lock().unwrap();
-        return Ok(Response::new(LogsResult {
-            logs: state.logs.clone(),
-        }));
     }
 
     async fn request_vote(
