@@ -1,10 +1,13 @@
+use std::mem::size_of;
+
 use chrono::{DateTime, Duration, Utc};
 use rand::{Rng, thread_rng};
+
 use crate::inmemory_storage::InMemoryStorage;
 use crate::raft_state::RaftNodeRole::{Follower, Leader};
-
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, LogEntry, RequestVoteRequest, RequestVoteResult};
 use crate::storage::PersistentStateStorage;
+use crate::util::{read_le_i64, read_le_u64};
 
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
@@ -49,6 +52,45 @@ pub struct RaftConsensusState {
     pub storage: Box<dyn PersistentStateStorage<String, Vec<u8>>>,
 }
 
+fn randomized_timeout_duration(base_millis: i64) -> Duration {
+    let mut rng = thread_rng();
+    Duration::milliseconds(base_millis + rng.gen_range(0..=base_millis))
+}
+
+fn log_entries_to_bytes(entries: Vec<LogEntry>) -> Vec<u8> {
+    let mut results = vec![];
+    entries.iter().for_each(|entry| {
+        let size = (size_of::<u64>() + size_of::<i64>() + entry.payload.len()) as u64;
+        let mut size_bytes = size.to_le_bytes().to_vec();
+        let mut term = entry.term.to_le_bytes().to_vec();
+        results.append(&mut size_bytes);
+        results.append(&mut term);
+        results.append(&mut entry.payload.clone());
+    });
+    return results;
+}
+
+fn bytes_to_log_entries(bytes: Vec<u8>) -> Vec<LogEntry> {
+    let mut results = vec![];
+    let mut start_offset = 0 as u64;
+    let bytes = bytes.as_slice();
+    loop {
+        let start = start_offset as usize;
+        let size = read_le_u64(&mut bytes[start..(start + 8)].as_ref());
+        let term = read_le_i64(&mut bytes[(start + 8)..(start + 16)].as_ref());
+        let payload = bytes[(start + 16)..(start + size as usize)].to_vec();
+        results.push(LogEntry {
+            term,
+            payload,
+        });
+        start_offset += size;
+        if start_offset >= bytes.len() as u64 {
+            break;
+        }
+    }
+    results
+}
+
 impl Default for RaftConsensusState {
     fn default() -> Self {
         let current_role = RaftNodeRole::Dead;
@@ -81,11 +123,6 @@ impl Default for RaftConsensusState {
             storage,
         }
     }
-}
-
-fn randomized_timeout_duration(base_millis: i64) -> Duration {
-    let mut rng = thread_rng();
-    Duration::milliseconds(base_millis + rng.gen_range(0..=base_millis))
 }
 
 impl RaftConsensusState {
@@ -156,10 +193,33 @@ impl RaftConsensusState {
         }
     }
 
+    fn restore_state_from_persistent_storage(&mut self) {
+        let term_bytes = self.storage.get(String::from("current_term"));
+        if let Some(term_bytes) = term_bytes {
+            self.current_term = read_le_i64(&mut term_bytes.as_slice());
+        }
+        let voted_for_bytes = self.storage.get(String::from("voted_for"));
+        if let Some(voted_for_bytes) = voted_for_bytes {
+            self.voted_for = String::from_utf8(voted_for_bytes.clone()).unwrap();
+        }
+        let log_bytes = self.storage.get(String::from("logs"));
+        if let Some(log_bytes) = log_bytes {
+            self.logs = bytes_to_log_entries(log_bytes.to_vec());
+        }
+    }
+
+    pub(crate) fn save_state_to_persistent_storage(&mut self) {
+        let term = self.current_term.to_le_bytes().to_vec();
+        let voted_for = self.voted_for.clone().into_bytes();
+        let log_entries = log_entries_to_bytes(self.logs.clone());
+        self.storage.set(String::from("current_term"), term);
+        self.storage.set(String::from("voted_for"), voted_for);
+        self.storage.set(String::from("logs"), log_entries);
+    }
+
     pub(crate) fn apply_heartbeat_result(&mut self, result: AppendEntriesResult) {
         if result.term > self.current_term {
             self.become_follower(result.term);
-            return;
         }
     }
 
