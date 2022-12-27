@@ -67,15 +67,15 @@ impl Raft for RaftServerHandler {
         request: Request<RequestVoteRequest>,
     ) -> Result<Response<RequestVoteResult>, Status> {
         let sc = self.raft_state.clone();
-        let mut s = sc.lock().unwrap();
-        if s.current_role == Dead {
+        let mut state = sc.lock().unwrap();
+        if state.current_role == Dead {
             return Err(Status::new(Code::Unavailable, "This node is dead"));
         }
         let args = request.get_ref();
-        let granted = s.apply_request_vote_request(args);
+        let granted = state.apply_request_vote_request(args);
         Ok(Response::new(RequestVoteResult {
             vote_granted: granted,
-            term: s.current_term,
+            term: state.current_term,
         }))
     }
 
@@ -85,6 +85,9 @@ impl Raft for RaftServerHandler {
     ) -> Result<Response<AppendEntriesResult>, Status> {
         let sc = self.raft_state.clone();
         let mut state = sc.lock().unwrap();
+        if state.current_role == Dead {
+            return Err(Status::new(Code::Unavailable, "This node is dead"));
+        }
         let args = request.get_ref();
         let success = state.apply_append_entries_request(args);
         return Ok(Response::new(AppendEntriesResult {

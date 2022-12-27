@@ -20,7 +20,7 @@ impl ClusterInfo {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum RaftNodeRole {
     Dead,
     Leader,
@@ -128,6 +128,7 @@ impl RaftConsensusState {
         self.current_leader_id = leader_id;
         self.next_indexes = self.next_indexes.iter().map(|_| self.logs.len() as i64).collect::<Vec<i64>>();
         self.match_indexes = self.match_indexes.iter().map(|_| 0).collect();
+        self.commit_index = -1;
     }
 
     pub(crate) fn update_commit_index(&mut self) {
@@ -211,7 +212,7 @@ impl RaftConsensusState {
 
         // append entries
         if req.prev_log_index < 0 {
-            self.logs.extend(req.logs.clone());
+            self.logs = req.logs.clone();
             return true;
         }
         let last_log_index = self.last_index();
@@ -219,11 +220,12 @@ impl RaftConsensusState {
             return false;
         }
         let prev_log = self.logs[req.prev_log_index as usize].clone();
-        if prev_log.term != req.term {
+        if prev_log.term != req.prev_log_term {
             return false;
         }
         // Overwrite
-        self.logs[..=(req.prev_log_index as usize)].to_vec().extend(req.logs.clone());
+        self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
+        self.logs.append(&mut req.logs.clone());
         return true;
     }
 
@@ -237,5 +239,135 @@ impl RaftConsensusState {
             payload: req.payload.clone(),
         });
         return true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::raft_state::RaftNodeRole::Follower;
+    use crate::RaftConsensusState;
+    use crate::rsraft::{AppendEntriesRequest, LogEntry};
+    use crate::util::read_le_u64;
+
+    #[test]
+    fn test_append_entries() {
+        // initialize
+        let mut state = RaftConsensusState::default();
+        state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: -1,
+            prev_log_term: -1,
+            logs: vec![],
+        });
+        assert_eq!(state.current_term, 1);
+        assert_eq!(state.current_role, Follower);
+        assert_eq!(state.current_leader_id, "leader");
+        assert_eq!(state.commit_index, -1);
+        assert_eq!(state.logs.len(), 0);
+
+        // Append a command
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: -1,
+            prev_log_term: -1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (100 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, true);
+        assert_eq!(state.logs.len(), 1);
+
+        // Append a command with illegal prev_log_index
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: 1,
+            prev_log_term: 1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (200 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, false);
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: 0,
+            prev_log_term: 2,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (200 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, false);
+
+        // Append a command
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: 0,
+            prev_log_term: 1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (200 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, true);
+        assert_eq!(state.logs.len(), 2);
+
+        // Overwrite existing commands
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: 0,
+            prev_log_term: 1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (250 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, true);
+        assert_eq!(state.logs.len(), 2);
+        assert_eq!(state.logs[1].term, 1);
+        assert_eq!(read_le_u64(&mut state.logs[0].payload.as_slice()), 100);
+        assert_eq!(read_le_u64(&mut state.logs[1].payload.as_slice()), 250);
+
+        // Fully replace
+        let result = state.apply_append_entries_request(&AppendEntriesRequest {
+            term: 1,
+            leader_id: String::from("leader"),
+            leader_commit_index: -1,
+            prev_log_index: -1,
+            prev_log_term: -1,
+            logs: vec![
+                LogEntry {
+                    term: 1,
+                    payload: (300 as u64).to_le_bytes().to_vec(),
+                }
+            ],
+        });
+        assert_eq!(result, true);
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs[0].term, 1);
+        assert_eq!(read_le_u64(&mut state.logs[0].payload.as_slice()), 300);
     }
 }

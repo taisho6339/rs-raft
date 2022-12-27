@@ -38,7 +38,7 @@ impl RaftServiceClient {
         let prev_log_index;
         let prev_log_term;
         let leader_commit_index;
-        let mut logs: Vec<LogEntry> = vec![];
+        let logs: Vec<LogEntry>;
         {
             let state = state_clone.borrow_mut().lock().unwrap();
             let next_index = state.next_indexes[peer_index];
@@ -50,7 +50,7 @@ impl RaftServiceClient {
 
             prev_log_index = next_index - 1;
             if prev_log_index >= 0 {
-                prev_log_term = logs[prev_log_index as usize].term;
+                prev_log_term = state.logs[prev_log_index as usize].term;
             } else {
                 prev_log_term = -1;
             }

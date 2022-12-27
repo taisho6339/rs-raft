@@ -192,7 +192,7 @@ impl RaftReconciler {
                     let role = self.current_role();
                     match role {
                         RaftNodeRole::Dead => {
-                            println!("[INFO] Dead");
+                            println!("[INFO] Dead: {}", node_id);
                         }
                         RaftNodeRole::Leader => {
                             println!("[INFO] Reconcile Leader: {}", node_id);
