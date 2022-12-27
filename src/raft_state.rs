@@ -1,7 +1,8 @@
 use chrono::{DateTime, Duration, Utc};
 use rand::{Rng, thread_rng};
+use crate::raft_state::RaftNodeRole::{Follower, Leader};
 
-use crate::rsraft::{AppendEntriesResult, LogEntry, RequestVoteResult};
+use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, LogEntry, RequestVoteRequest, RequestVoteResult};
 
 const ELECTION_TIME_OUT_BASE_MILLIS: i64 = 150;
 
@@ -169,5 +170,72 @@ impl RaftConsensusState {
         } else {
             self.next_indexes[peer_index] -= 1;
         }
+    }
+
+    pub(crate) fn apply_request_vote_request(&mut self, req: &RequestVoteRequest) -> bool {
+        if req.term > self.current_term {
+            self.become_follower(req.term);
+        }
+        let last_log_index = self.last_index();
+        let last_log_term = self.last_log_term();
+        let acceptable = req.term == self.current_term &&
+            (req.candidate_id == self.voted_for || self.voted_for == "") &&
+            (req.last_log_term > last_log_term || (req.last_log_term == last_log_term && req.last_log_index >= last_log_index));
+
+        return if acceptable {
+            self.voted_for = req.candidate_id.clone();
+            true
+        } else {
+            false
+        };
+    }
+
+    pub(crate) fn apply_append_entries_request(&mut self, req: &AppendEntriesRequest) -> bool {
+        if self.current_term > req.term {
+            return false;
+        }
+        if self.current_role != Follower || self.current_term < req.term {
+            self.become_follower(req.term);
+        }
+
+        self.last_heartbeat_time = Utc::now();
+        self.current_leader_id = req.leader_id.clone();
+        if self.commit_index < req.leader_commit_index {
+            self.commit_index = req.leader_commit_index;
+        }
+
+        // heartbeat
+        if req.logs.len() == 0 {
+            return true;
+        };
+
+        // append entries
+        if req.prev_log_index < 0 {
+            self.logs.extend(req.logs.clone());
+            return true;
+        }
+        let last_log_index = self.last_index();
+        if last_log_index < req.prev_log_index {
+            return false;
+        }
+        let prev_log = self.logs[req.prev_log_index as usize].clone();
+        if prev_log.term != req.term {
+            return false;
+        }
+        // Overwrite
+        self.logs[..=(req.prev_log_index as usize)].to_vec().extend(req.logs.clone());
+        return true;
+    }
+
+    pub(crate) fn apply_command_request(&mut self, req: &CommandRequest) -> bool {
+        if self.current_role != Leader {
+            return false;
+        }
+        let term = self.current_term;
+        self.logs.push(LogEntry {
+            term,
+            payload: req.payload.clone(),
+        });
+        return true;
     }
 }
