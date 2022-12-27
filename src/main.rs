@@ -22,11 +22,10 @@ mod rsraft;
 //     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
 // }
 
-async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, other_hosts: Vec<&'static str>, server_config: RaftServerConfig) -> Result<()> {
+async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, other_hosts: Vec<&'static str>, server_config: RaftServerConfig, raft_state: Arc<Mutex<RaftConsensusState>>) -> Result<()> {
     let (tx, rx) = watch::channel(());
     let rx1 = rx.clone();
     let rx2 = rx.clone();
-    let mut raft_state = Arc::new(Mutex::new(RaftConsensusState::default()));
     let raft_state1 = raft_state.clone();
     let raft_state2 = raft_state.clone();
 
@@ -43,7 +42,8 @@ async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, oth
     });
 
     {
-        let mut state = raft_state.borrow_mut().lock().unwrap();
+        let mut raft_state_clone = raft_state.clone();
+        let mut state = raft_state_clone.borrow_mut().lock().unwrap();
         state.initialize_indexes(other_hosts.len());
         state.become_follower(0);
     }
@@ -75,7 +75,9 @@ async fn main() -> Result<()> {
     };
     let this_node_id = "localhost:8080";
     let other_hosts = vec!["http://localhost:8080"];
-    run_process(signal, String::from(this_node_id), other_hosts, config).await?;
+    let state = RaftConsensusState::default();
+    let raft_state = Arc::new(Mutex::new(state));
+    run_process(signal, String::from(this_node_id), other_hosts, config, raft_state).await?;
 
     Ok(())
 }
@@ -85,27 +87,12 @@ mod tests {
     use std::time::Duration;
 
     use tokio::sync::watch::channel;
-    use tonic::transport::Endpoint;
+    use tokio::time::interval;
 
-    use crate::rsraft::{CommandRequest, LeaderRequest, LogsRequest};
+    use crate::rsraft::CommandRequest;
     use crate::rsraft::raft_client::RaftClient;
 
     use super::*;
-
-    async fn get_leader_host() -> String {
-        let mut client = RaftClient::connect(Endpoint::from_static("http://localhost:8070")).await.unwrap();
-        let leader;
-        loop {
-            let r = tonic::Request::new(LeaderRequest {});
-            let res = client.leader(r).await.unwrap();
-            let message = res.get_ref();
-            if message.leader.len() > 0 {
-                leader = format!("http://{}", message.leader.clone());
-                break;
-            }
-        }
-        leader
-    }
 
     fn read_le_u64(input: &mut &[u8]) -> u64 {
         let (int_bytes, rest) = input.split_at(std::mem::size_of::<u64>());
@@ -113,36 +100,21 @@ mod tests {
         u64::from_le_bytes(int_bytes.try_into().unwrap())
     }
 
-    async fn assert_single_leader() {
-        let hosts = vec!["http://localhost:8070", "http://localhost:8080", "http://localhost:8090"];
-        let mut results = vec![];
-        for h in hosts.iter() {
-            let mut client = RaftClient::connect(Endpoint::from_static(h)).await.unwrap();
-            let r = tonic::Request::new(LeaderRequest {});
-            let res = client.leader(r).await.unwrap();
-            let message = res.get_ref();
-            results.push(message.leader.clone());
-        }
-        let mut buf = vec![];
-        for res in results.iter() {
-            if !buf.contains(res) {
-                buf.push(res.clone());
+    async fn eventually_assert<F>(mut f: F, timout_millis: u64) where
+        F: FnMut() -> bool {
+        let mut loop_interval = interval(Duration::from_millis(10));
+        loop {
+            select! {
+                _ = tokio::time::sleep(Duration::from_millis(timout_millis)) => {
+                    panic!("timeout in this test case");
+                }
+                _ = loop_interval.tick() => {
+                    let success = f();
+                    if success {
+                        return;
+                    }
+                }
             }
-        }
-        assert_eq!(buf.len(), 1);
-    }
-
-    async fn assert_commit_log() {
-        let hosts = vec!["http://localhost:8070", "http://localhost:8080", "http://localhost:8090"];
-        // let mut results = vec![];
-        for h in hosts.iter() {
-            let mut client = RaftClient::connect(Endpoint::from_static(h)).await.unwrap();
-            let r = tonic::Request::new(LogsRequest {});
-            let res = client.logs(r).await.unwrap();
-            let message = res.get_ref();
-            let mut payload = message.logs[0].payload.as_slice();
-            let value = read_le_u64(&mut payload);
-            println!("{}", value);
         }
     }
 
@@ -152,34 +124,69 @@ mod tests {
         let mut rx1 = rx.clone();
         let mut rx2 = rx.clone();
         let mut rx3 = rx.clone();
+        let s1 = Arc::new(Mutex::new(RaftConsensusState::default()));
+        let s2 = Arc::new(Mutex::new(RaftConsensusState::default()));
+        let s3 = Arc::new(Mutex::new(RaftConsensusState::default()));
+        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
         let r1 = tokio::spawn(async move {
             let server_config = RaftServerConfig { port: 8070 };
-            let _ = run_process(async move { let _ = rx1.changed().await; }, format!("localhost:{}", 8070), vec!["http://localhost:8080", "http://localhost:8090"], server_config)
+            let _ = run_process(async move { let _ = rx1.changed().await; }, format!("localhost:{}", 8070), vec!["http://localhost:8080", "http://localhost:8090"], server_config, s1_clone)
                 .await;
         });
         let r2 = tokio::spawn(async move {
             let server_config = RaftServerConfig { port: 8080 };
-            let _ = run_process(async move { let _ = rx2.changed().await; }, format!("localhost:{}", 8080), vec!["http://localhost:8070", "http://localhost:8090"], server_config)
+            let _ = run_process(async move { let _ = rx2.changed().await; }, format!("localhost:{}", 8080), vec!["http://localhost:8070", "http://localhost:8090"], server_config, s2_clone)
                 .await;
         });
         let r3 = tokio::spawn(async move {
             let server_config = RaftServerConfig { port: 8090 };
-            let _ = run_process(async move { let _ = rx3.changed().await; }, format!("localhost:{}", 8090), vec!["http://localhost:8070", "http://localhost:8080"], server_config)
+            let _ = run_process(async move { let _ = rx3.changed().await; }, format!("localhost:{}", 8090), vec!["http://localhost:8070", "http://localhost:8080"], server_config, s3_clone)
                 .await;
         });
 
-        let leader = get_leader_host().await;
-        assert_single_leader().await;
+        // Make sure the single Leader is elected
+        let (mut s1_clone, mut s2_clone, mut s3_clone) = (s1.clone(), s2.clone(), s3.clone());
+        eventually_assert(move || {
+            let s1 = s1_clone.borrow_mut().lock().unwrap();
+            let s2 = s2_clone.borrow_mut().lock().unwrap();
+            let s3 = s3_clone.borrow_mut().lock().unwrap();
+            if s1.current_leader_id == "" {
+                return false;
+            }
+            let unified_leader = (s1.current_leader_id == s2.current_leader_id) && (s1.current_leader_id == s3.current_leader_id);
+            let unified_term = (s1.current_term == s2.current_term) && (s1.current_term == s3.current_term);
+            return unified_leader && unified_term;
+        }, 1000).await;
 
-        let mut client = RaftClient::connect(leader).await.unwrap();
+        // Send command
+        let leader_host;
+        {
+            let mut s1_clone = s1.clone();
+            let state = s1_clone.borrow_mut().lock().unwrap();
+            leader_host = format!("http://{}", state.current_leader_id);
+        }
+        let mut client = RaftClient::connect(leader_host).await.unwrap();
         let payload = (1 as u64).to_le_bytes().to_vec();
         let req = tonic::Request::new(CommandRequest {
             payload,
         });
         let res = client.command(req).await.unwrap();
         assert_eq!(res.get_ref().success, true);
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_commit_log().await;
+
+        // Commit check
+        let (mut s1_clone, mut s2_clone, mut s3_clone) = (s1.clone(), s2.clone(), s3.clone());
+        eventually_assert(move || {
+            let s1 = s1_clone.borrow_mut().lock().unwrap();
+            let s2 = s2_clone.borrow_mut().lock().unwrap();
+            let s3 = s3_clone.borrow_mut().lock().unwrap();
+            if s1.commit_index < 0 {
+                return false;
+            }
+            let unified_commit_index = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
+            let unified_logs = s1.logs.eq(&s2.logs) && s1.logs.eq(&s3.logs);
+            return unified_commit_index && unified_logs;
+        }, 1000).await;
+
 
         tx.send(()).unwrap();
         r1.await.unwrap();
