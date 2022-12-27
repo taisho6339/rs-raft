@@ -111,6 +111,7 @@ impl RaftServiceClient {
             }
             let (i, result) = opt.unwrap();
             state.apply_append_entries_result(i, result);
+            state.save_state_to_persistent_storage();
         }
     }
 
@@ -162,6 +163,7 @@ impl RaftServiceClient {
                 continue;
             }
             state.apply_request_vote_result(result.unwrap());
+            state.save_state_to_persistent_storage();
         }
     }
 
@@ -215,6 +217,7 @@ impl RaftServiceClient {
                 continue;
             }
             state.apply_heartbeat_result(result.unwrap());
+            state.save_state_to_persistent_storage();
         }
     }
 }

@@ -41,6 +41,7 @@ impl Raft for RaftServerHandler {
         let mut state_clone = self.raft_state.clone();
         let mut state = state_clone.borrow_mut().lock().unwrap();
         let success = state.apply_command_request(args);
+        state.save_state_to_persistent_storage();
         Ok(Response::new(CommandResult {
             success
         }))
@@ -73,6 +74,7 @@ impl Raft for RaftServerHandler {
         }
         let args = request.get_ref();
         let granted = state.apply_request_vote_request(args);
+        state.save_state_to_persistent_storage();
         Ok(Response::new(RequestVoteResult {
             vote_granted: granted,
             term: state.current_term,
@@ -90,6 +92,7 @@ impl Raft for RaftServerHandler {
         }
         let args = request.get_ref();
         let success = state.apply_append_entries_request(args);
+        state.save_state_to_persistent_storage();
         return Ok(Response::new(AppendEntriesResult {
             term: state.current_term,
             success,

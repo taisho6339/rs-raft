@@ -22,4 +22,8 @@ impl PersistentStateStorage<String, Vec<u8>> for InMemoryStorage {
     fn set(&mut self, key: String, value: Vec<u8>) {
         self.data.insert(key, value);
     }
+
+    fn has_data(&self) -> bool {
+        self.data.keys().len() > 0
+    }
 }

@@ -72,6 +72,9 @@ fn log_entries_to_bytes(entries: Vec<LogEntry>) -> Vec<u8> {
 
 fn bytes_to_log_entries(bytes: Vec<u8>) -> Vec<LogEntry> {
     let mut results = vec![];
+    if bytes.len() == 0 {
+        return results;
+    }
     let mut start_offset = 0 as u64;
     let bytes = bytes.as_slice();
     loop {
@@ -130,6 +133,9 @@ impl RaftConsensusState {
         let mut state = RaftConsensusState::default();
         state.initialize_indexes(other_peers_size);
         state.storage = storage;
+        if state.storage.has_data() {
+            state.restore_state_from_persistent_storage();
+        }
         return state;
     }
 
@@ -250,6 +256,7 @@ impl RaftConsensusState {
     pub(crate) fn apply_request_vote_request(&mut self, req: &RequestVoteRequest) -> bool {
         if req.term > self.current_term {
             self.become_follower(req.term);
+            self.save_state_to_persistent_storage();
         }
         let last_log_index = self.last_index();
         let last_log_term = self.last_log_term();
@@ -259,6 +266,7 @@ impl RaftConsensusState {
 
         return if acceptable {
             self.voted_for = req.candidate_id.clone();
+            self.save_state_to_persistent_storage();
             true
         } else {
             false
@@ -318,8 +326,8 @@ impl RaftConsensusState {
 
 #[cfg(test)]
 mod tests {
+    use crate::{InMemoryStorage, RaftConsensusState};
     use crate::raft_state::RaftNodeRole::{Candidate, Follower, Leader};
-    use crate::RaftConsensusState;
     use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, LogEntry, RequestVoteRequest, RequestVoteResult};
     use crate::util::read_le_u64;
 
@@ -464,8 +472,8 @@ mod tests {
     #[test]
     fn test_request_vote_result() {
         // initialize
-        let mut state = RaftConsensusState::default();
-        state.initialize_indexes(2);
+        let storage = Box::new(InMemoryStorage::new());
+        let mut state = RaftConsensusState::new(2, storage);
         state.become_candidate(String::from("candidate"));
         state.apply_request_vote_result(RequestVoteResult {
             term: 2,
@@ -491,6 +499,30 @@ mod tests {
         assert_eq!(state.current_role, Candidate);
         assert_eq!(state.current_term, 3);
         assert_eq!(state.received_granted, 2);
+    }
+
+    #[test]
+    fn test_persistent_storage() {
+        let storage = Box::new(InMemoryStorage::new());
+        let mut state = RaftConsensusState::new(2, storage);
+        state.become_follower(1);
+        state.apply_request_vote_request(&RequestVoteRequest {
+            term: 1,
+            candidate_id: String::from("candidate"),
+            last_log_index: 0,
+            last_log_term: 0,
+        });
+        state.logs.push(LogEntry {
+            term: 1,
+            payload: (100 as u64).to_le_bytes().to_vec(),
+        });
+        state.save_state_to_persistent_storage();
+        let new_state = RaftConsensusState::new(2, state.storage);
+        assert_eq!(new_state.current_term, 1);
+        assert_eq!(new_state.voted_for, "candidate");
+        assert_eq!(new_state.logs.len(), 1);
+        assert_eq!(new_state.logs[0].term, 1);
+        assert_eq!(new_state.logs[0].payload, (100 as u64).to_le_bytes().to_vec());
     }
 
     #[test]
