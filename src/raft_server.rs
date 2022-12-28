@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Context;
+use log::info;
 use tokio::sync::watch::Receiver;
 use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
@@ -129,12 +130,12 @@ impl RaftServerDaemon {
         let handler = RaftServerHandler {
             raft_state
         };
-        println!("[INFO] Starting gRPC server...");
+        info!("Starting gRPC server...");
         Server::builder()
             .add_service(RaftServer::new(handler))
             .serve_with_shutdown(addr, async {
                 let _ = signal.changed().await;
-                println!("[INFO] Shutting down gRPC server...");
+                info!("Shutting down gRPC server...");
             })
             .await
             .context("failed to serve")?;

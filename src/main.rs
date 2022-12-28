@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
+use log::info;
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
@@ -18,14 +19,17 @@ mod raft_state;
 mod raft_reconciler;
 mod raft_server;
 mod raft_client;
-mod rsraft;
 mod util;
 mod storage;
 mod inmemory_storage;
 
-// pub mod rsraft {
-//     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
-// }
+pub mod rsraft {
+    tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
+}
+
+fn init_logger() {
+    env_logger::init();
+}
 
 async fn run_process<F: Future<Output=()>, P: PersistentStateStorage, A: ApplyStorage>(
     close_signal: F,
@@ -67,9 +71,10 @@ async fn run_process<F: Future<Output=()>, P: PersistentStateStorage, A: ApplySt
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_logger();
     let mut sig_term = signal(SignalKind::terminate()).context("failed to setup SIGTERM channel")?;
     let mut sig_int = signal(SignalKind::interrupt()).context("failed to setup SIGINT channel")?;
-    let mut port = env::var("RAFT_RPC_PORT");
+    let port = env::var("RAFT_RPC_PORT");
     let port_number;
     if port.is_err() {
         port_number = 8080;
@@ -82,10 +87,10 @@ async fn main() -> Result<()> {
     let signal = async {
         select! {
             _ = sig_term.recv() => {
-                println!("[INFO] Received SIGTERM");
+                info!("Received SIGTERM");
             }
             _ = sig_int.recv() => {
-                println!("[INFO] Received SIGINT");
+                info!("Received SIGINT");
             }
         }
     };
@@ -164,7 +169,7 @@ mod tests {
         s2: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
         s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
     ) {
-        println!("[CASE] Make sure the single leader is elected");
+        info!("[CASE] Make sure the single leader is elected");
         let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
         eventually_assert(move || {
             let s1 = s1_clone.read().unwrap();
@@ -185,7 +190,7 @@ mod tests {
         s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
         log_size: usize,
     ) {
-        println!("[CASE] Make sure command replicated");
+        info!("[CASE] Make sure command replicated");
         let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
         eventually_assert(move || {
             let s1 = s1_clone.read().unwrap();
@@ -236,7 +241,7 @@ mod tests {
     }
 
     async fn assert_old_leader_turn_follower(old_leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
-        println!("[CASE] The old leader turns to Follower when the recovery");
+        info!("[CASE] The old leader turns to Follower when the recovery");
         eventually_assert(move || {
             let state = old_leader_state.read().unwrap();
             return state.current_role == Follower;

@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
+use log::info;
 use tokio::select;
 use tokio::sync::watch::Receiver;
 use tokio::time::interval;
@@ -65,13 +66,13 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
     fn become_candidate(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
         let mut state = self.state.write().unwrap();
-        println!("[INFO] Become a candidate on term: {}, {}", state.current_term, node_id);
+        info!("Become a candidate on term: {}, {}", state.current_term, node_id);
         state.become_candidate(node_id);
     }
 
     pub fn spawn_request_votes(&mut self, timeout_millis: u64) {
         let node_id = self.cluster_info.node_id.clone();
-        println!("[INFO] spawn request votes: {}", node_id);
+        info!("spawn request votes: {}", node_id);
         let mut ch = self.signal.clone();
         let c = self.client.clone();
         let state_clone = self.state.clone();
@@ -91,7 +92,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
 
     pub fn spawn_append_entries_loop(&mut self, timeout_millis: u64) {
         let node_id = self.cluster_info.node_id.clone();
-        println!("[INFO] Start append entries loop: {}", node_id);
+        info!("Start append entries loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(APPEND_ENTRIES_TICK_DURATION_MILLIS as u64));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
@@ -103,7 +104,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
                         return;
                     }
                     _ = interval.tick() => {
-                        println!("[INFO] Sending Append Entries requests...: {}", node_id);
+                        info!("Sending Append Entries requests...: {}", node_id);
                         {
                             let current_role;
                             current_role = state_clone.read().unwrap().current_role;
@@ -120,7 +121,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
 
     pub fn spawn_heartbeat_loop(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
-        println!("[INFO] Start heart beat loop: {}", node_id);
+        info!("Start heart beat loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(HEART_BEAT_TICK_DURATION_MILLIS));
         let mut ch = self.signal.clone();
         let rsc = self.client.clone();
@@ -133,7 +134,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
                         return;
                     }
                     _ = interval.tick() => {
-                        println!("[INFO] Sending heartbeats...: {}", node_id);
+                        info!("Sending heartbeats...: {}", node_id);
                         {
                             let current_role;
                             current_role = state_clone.read().unwrap().current_role;
@@ -151,7 +152,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
     fn reconcile_election_results(&mut self) {
         let granted_objective = (self.cluster_info.other_hosts.len() + 1) as i64;
         if 2 * self.received_granted() >= granted_objective {
-            println!("[INFO] Become the Leader: {}", self.cluster_info.node_id.clone());
+            info!("Become the Leader: {}", self.cluster_info.node_id.clone());
             self.become_leader();
             self.spawn_heartbeat_loop();
             self.spawn_append_entries_loop(APPEND_ENTRIES_TICK_DURATION_MILLIS);
@@ -180,33 +181,33 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
 
     pub async fn reconcile_loop(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
-        println!("[INFO] Start reconcile loop: {}", node_id);
+        info!("Start reconcile loop: {}", node_id);
         let mut interval = interval(core::time::Duration::from_millis(RECONCILE_TICK_DURATION_MILLIS));
         let mut ch = self.signal.clone();
         loop {
             select! {
                 _ = ch.changed() => {
-                    println!("[INFO] Shutting down reconcile loop...: {}", node_id);
+                    info!("Shutting down reconcile loop...: {}", node_id);
                     return;
                 }
                 _ = interval.tick() => {
                     let role = self.current_role();
                     match role {
                         RaftNodeRole::Dead => {
-                            println!("[INFO] Dead: {}", node_id);
+                            info!("Dead: {}", node_id);
                         }
                         RaftNodeRole::Leader => {
-                            println!("[INFO] Reconcile Leader: {}", node_id);
+                            info!("Reconcile Leader: {}", node_id);
                             self.reconcile_commit_index();
                             self.reconcile_apply();
                         }
                         RaftNodeRole::Follower => {
-                            println!("[INFO] Reconcile Follower: {}", node_id);
+                            info!("Reconcile Follower: {}", node_id);
                             self.reconcile_election_timeout();
                             self.reconcile_apply();
                         }
                         RaftNodeRole::Candidate => {
-                            println!("[INFO] Reconcile Candidate: {}", node_id);
+                            info!("Reconcile Candidate: {}", node_id);
                             self.reconcile_election_timeout();
                             self.reconcile_election_results();
                         }

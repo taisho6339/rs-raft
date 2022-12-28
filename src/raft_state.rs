@@ -2,6 +2,7 @@ use std::cmp::min;
 use std::mem::size_of;
 
 use chrono::{DateTime, Duration, Utc};
+use log::info;
 use rand::{Rng, thread_rng};
 
 use crate::raft_state::RaftNodeRole::{Follower, Leader};
@@ -210,7 +211,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         let mid_index = indexes.len() / 2;
         if self.commit_index < indexes[mid_index] {
             self.commit_index = indexes[mid_index];
-            println!("[INFO] commit index updated by {}", self.commit_index);
+            info!("commit index updated by {}", self.commit_index);
         }
     }
 
