@@ -1,4 +1,3 @@
-use std::borrow::BorrowMut;
 use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
@@ -53,19 +52,18 @@ impl RaftReconciler {
     }
 
     fn update_commit_index(&mut self) {
-        let mut state_ref = self.state.clone();
-        let mut state = state_ref.borrow_mut().write().unwrap();
+        let mut state = self.state.write().unwrap();
         state.update_commit_index();
     }
 
     fn become_leader(&mut self) {
-        let mut state = self.state.borrow_mut().write().unwrap();
+        let mut state = self.state.write().unwrap();
         state.become_leader(self.cluster_info.node_id.clone());
     }
 
     fn become_candidate(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
-        let mut state = self.state.borrow_mut().write().unwrap();
+        let mut state = self.state.write().unwrap();
         println!("[INFO] Become a candidate on term: {}, {}", state.current_term, node_id);
         state.become_candidate(node_id);
     }
@@ -82,7 +80,7 @@ impl RaftReconciler {
                     _ = ch.changed() => {
                         return;
                     }
-                    _ = c.send_request_vote_over_cluster(state_clone.clone(), timeout_millis) => {
+                    _ = c.send_request_vote_over_cluster(&state_clone, timeout_millis) => {
                         return;
                     }
                 }
@@ -107,14 +105,12 @@ impl RaftReconciler {
                         println!("[INFO] Sending Append Entries requests...: {}", node_id);
                         {
                             let current_role;
-                            let state_clone = state_clone.clone();
                             current_role = state_clone.read().unwrap().current_role;
                             if current_role != Leader {
                                 return;
                             }
                         }
-                        let state_clone = state_clone.clone();
-                        rsc.send_append_entries_over_cluster(state_clone, timeout_millis).await;
+                        rsc.send_append_entries_over_cluster(&state_clone, timeout_millis).await;
                     }
                 }
             }
@@ -144,7 +140,7 @@ impl RaftReconciler {
                                 return;
                             }
                         }
-                        rsc.send_heartbeat_over_cluster(state_clone.clone(), HEART_BEAT_TICK_DURATION_MILLIS).await;
+                        rsc.send_heartbeat_over_cluster(&state_clone, HEART_BEAT_TICK_DURATION_MILLIS).await;
                     }
                 }
             }
