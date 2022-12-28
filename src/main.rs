@@ -126,13 +126,13 @@ mod tests {
 
     use super::*;
 
-    fn leader_host<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>) -> String {
+    fn get_leader_host<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>) -> String {
         let state = s1.read().unwrap();
         state.current_leader_id.clone()
     }
 
     async fn submit_command<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>, key: String, payload: u64) -> Response<CommandResult> {
-        let leader_host = format!("http://{}", leader_host(s1.clone()));
+        let leader_host = format!("http://{}", get_leader_host(s1.clone()));
         let mut client = RaftClient::connect(leader_host).await.unwrap();
         let payload = convert_to_payload(key, payload);
         let req = tonic::Request::new(CommandRequest {
@@ -201,8 +201,18 @@ mod tests {
                 return false;
             }
             let equals_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
-            let equals_commit_logs = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
-            return equals_logs && equals_commit_logs;
+            return equals_logs;
+        }, 5000).await;
+    }
+
+    async fn assert_leader_commit_index(
+        leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        commit_index: i64,
+    ) {
+        info!("[CASE] Make sure commit index");
+        eventually_assert(move || {
+            let s1 = leader_state.read().unwrap();
+            return s1.commit_index == commit_index;
         }, 5000).await;
     }
 
@@ -249,39 +259,61 @@ mod tests {
         }, 5000).await;
     }
 
-    async fn assert_commands_applied(
-        s1: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
-        s2: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
-        s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
-    ) {
+    async fn assert_commands_applied(keys: Vec<&str>, values: Vec<u64>, leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
         eventually_assert(move || {
-            let s1 = s1.read().unwrap();
-            let s2 = s2.read().unwrap();
-            let s3 = s3.read().unwrap();
-            let s1 = &s1.apply_storage.data;
-            let s2 = &s2.apply_storage.data;
-            let s3 = &s3.apply_storage.data;
-            let keys = vec!["first", "second", "third"];
-
-            for k in keys.iter() {
-                let r1 = s1.get(*k);
-                let r2 = s2.get(*k);
-                let r3 = s3.get(*k);
-                if r1.is_none() || r2.is_none() || r3.is_none() {
+            let s1 = leader_state.read().unwrap();
+            let storage = &s1.apply_storage.data;
+            if storage.keys().len() != keys.len() {
+                return false;
+            }
+            for (i, k) in keys.iter().enumerate() {
+                let v = storage.get(&String::from(*k));
+                if v.is_none() {
                     return false;
                 }
-                if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
+                let v = v.unwrap();
+                if *v != values[i] {
                     return false;
                 }
             }
             return true;
-        }, 1000).await;
+        }, 5000).await;
     }
+
+    // async fn assert_commands_applied(
+    //     other_members_states: Vec<&Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>>,
+    // ) {
+    //     eventually_assert(move || {
+    //         let s1 = other_members_states[0].clone().read().unwrap();
+    //
+    //         let s1 = s1.read().unwrap();
+    //         let s2 = s2.read().unwrap();
+    //         let s3 = s3.read().unwrap();
+    //         let s1 = &s1.apply_storage.data;
+    //         let s2 = &s2.apply_storage.data;
+    //         let s3 = &s3.apply_storage.data;
+    //         let keys = vec!["first", "second", "third", "forth"];
+    //
+    //         for k in keys.iter() {
+    //             let r1 = s1.get(*k);
+    //             let r2 = s2.get(*k);
+    //             let r3 = s3.get(*k);
+    //             if r1.is_none() || r2.is_none() || r3.is_none() {
+    //                 return false;
+    //             }
+    //             if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
+    //                 return false;
+    //             }
+    //         }
+    //         return true;
+    //     }, 5000).await;
+    // }
 
     #[tokio::test]
     #[timeout(10000)]
     async fn test_e2e() {
         // Initialize
+        init_logger();
         let (tx, rx) = channel(());
         let mut rx1_clone = rx.clone();
         let mut rx2_clone = rx.clone();
@@ -316,22 +348,24 @@ mod tests {
         let res = submit_command(s1.clone(), String::from("first"), 1).await;
         assert_eq!(res.get_ref().success, true);
         assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 1).await;
+        let leader_host = get_leader_host(s1.clone());
+        let leader_state = states_map.get(leader_host.as_str()).unwrap();
+        assert_leader_commit_index(leader_state.clone(), 0).await;
 
         // Send second command
         let res = submit_command(s1.clone(), String::from("second"), 2).await;
         assert_eq!(res.get_ref().success, true);
         assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 2).await;
+        assert_leader_commit_index(leader_state.clone(), 1).await;
 
         // Leader Failure
-        let leader_host = leader_host(s1.clone());
-        let leader_state = states_map.get(leader_host.as_str()).unwrap();
-        kill_current_leader(leader_state.clone());
+        let old_leader_state = leader_state;
+        kill_current_leader(old_leader_state.clone());
         let other_members_states = states_map.iter()
             .filter(|(k, _)| (**k).ne(leader_host.as_str()))
             .map(|(_, v)| v)
             .collect::<Vec<&Arc<RwLock<RaftConsensusState<_, _>>>>>();
         assert_new_member_elected_if_leader_failure(leader_host, other_members_states.clone()).await;
-
         let res = submit_command(other_members_states[0].clone(), String::from("third"), 3).await;
         assert_eq!(res.get_ref().success, true);
 
@@ -341,8 +375,14 @@ mod tests {
         assert_old_leader_turn_follower(leader_state.clone()).await;
         assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 3).await;
 
-        // Apply check
-        assert_commands_applied(s1.clone(), s2.clone(), s3.clone()).await;
+        let res = submit_command(other_members_states[0].clone(), String::from("forth"), 4).await;
+        assert_eq!(res.get_ref().success, true);
+        assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 4).await;
+
+        let leader_host = get_leader_host(s1.clone());
+        let leader_state = states_map.get(leader_host.as_str()).unwrap();
+        assert_leader_commit_index(leader_state.clone(), 3).await;
+        assert_commands_applied(vec!["first", "second", "third", "forth"], vec![1, 2, 3, 4], leader_state.clone()).await;
 
         tx.send(()).unwrap();
         r1.await.unwrap();

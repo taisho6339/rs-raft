@@ -176,12 +176,6 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         self.current_role = RaftNodeRole::Follower;
         self.last_heartbeat_time = Utc::now();
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
-        if self.commit_index < 0 {
-            self.logs = vec![];
-            self.last_applied = -1;
-        } else {
-            self.logs = self.logs[..=self.commit_index as usize].to_vec();
-        }
     }
 
     pub(crate) fn become_candidate(&mut self, node_id: String) {
@@ -314,9 +308,6 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
 
         self.last_heartbeat_time = Utc::now();
         self.current_leader_id = req.leader_id.clone();
-        if self.commit_index < req.leader_commit_index {
-            self.commit_index = min(req.leader_commit_index, self.last_index());
-        }
 
         // heartbeat
         if req.logs.len() == 0 {
@@ -326,20 +317,22 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         // append entries
         if req.prev_log_index < 0 {
             self.logs = req.logs.clone();
-            return true;
+        } else {
+            let last_log_index = self.last_index();
+            if last_log_index < req.prev_log_index {
+                return false;
+            }
+            let prev_log = self.logs[req.prev_log_index as usize].clone();
+            if prev_log.term != req.prev_log_term {
+                return false;
+            }
+            // Overwrite
+            self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
+            self.logs.append(&mut req.logs.clone());
         }
-        let last_log_index = self.last_index();
-        if last_log_index < req.prev_log_index {
-            return false;
+        if self.commit_index < req.leader_commit_index {
+            self.commit_index = min(req.leader_commit_index, self.last_index());
         }
-        let prev_log = self.logs[req.prev_log_index as usize].clone();
-        if prev_log.term != req.prev_log_term {
-            return false;
-        }
-
-        // Overwrite
-        self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
-        self.logs.append(&mut req.logs.clone());
         return true;
     }
 

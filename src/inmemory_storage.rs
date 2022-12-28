@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::storage::{ApplyStorage, PersistentStateStorage};
 use crate::util::read_le_u64;
 
+#[derive(Clone)]
 pub struct MockInMemoryStorage {
     data: HashMap<String, Vec<u8>>,
 }
