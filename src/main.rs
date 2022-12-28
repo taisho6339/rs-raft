@@ -193,7 +193,7 @@ mod tests {
             let equals_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
             let equals_commit_logs = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
             return equals_logs && equals_commit_logs;
-        }, 1000).await;
+        }, 5000).await;
     }
 
     fn kill_current_leader(leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
@@ -218,7 +218,7 @@ mod tests {
             }
             return (s1.current_role == Leader && s2.current_role == Follower)
                 || (s1.current_role == Follower && s2.current_role == Leader);
-        }, 1000).await;
+        }, 5000).await;
     }
 
     fn set_non_committed_log_to_old_leader(old_leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
@@ -236,7 +236,7 @@ mod tests {
         eventually_assert(move || {
             let state = old_leader_state.read().unwrap();
             return state.current_role == Follower;
-        }, 1000).await;
+        }, 5000).await;
     }
 
     async fn assert_commands_applied(

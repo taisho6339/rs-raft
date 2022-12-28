@@ -179,7 +179,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
             self.logs = vec![];
             self.last_applied = -1;
         } else {
-            self.logs = self.logs[..self.commit_index as usize].to_vec();
+            self.logs = self.logs[..=self.commit_index as usize].to_vec();
         }
     }
 
