@@ -127,10 +127,6 @@ mod tests {
         return client.command(req).await.unwrap();
     }
 
-    // fn read_command(payload: Vec<u8>) -> (String, u64) {
-    //     return read_payload(payload.as_slice());
-    // }
-
     async fn eventually_assert<F>(mut f: F, timout_millis: u64) where
         F: FnMut() -> bool {
         let flag = Arc::new(RwLock::new(false));
