@@ -175,6 +175,12 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         self.current_role = RaftNodeRole::Follower;
         self.last_heartbeat_time = Utc::now();
         self.election_timeout = randomized_timeout_duration(ELECTION_TIME_OUT_BASE_MILLIS);
+        if self.commit_index < 0 {
+            self.logs = vec![];
+            self.last_applied = -1;
+        } else {
+            self.logs = self.logs[..self.commit_index as usize].to_vec();
+        }
     }
 
     pub(crate) fn become_candidate(&mut self, node_id: String) {
@@ -214,8 +220,8 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         }
         let start = self.last_applied;
         for i in (start + 1)..=self.commit_index {
-            let payload = &self.logs[i as usize];
-            let result = self.apply_storage.apply(payload.payload.clone());
+            let entry = &self.logs[i as usize];
+            let result = self.apply_storage.apply(entry.payload.clone());
             if result.is_err() {
                 return;
             }
@@ -329,6 +335,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         if prev_log.term != req.prev_log_term {
             return false;
         }
+
         // Overwrite
         self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
         self.logs.append(&mut req.logs.clone());

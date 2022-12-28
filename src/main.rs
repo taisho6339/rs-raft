@@ -95,6 +95,8 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::thread;
+    use std::thread::sleep;
     use std::time::Duration;
 
     use ntest::timeout;
@@ -106,13 +108,12 @@ mod tests {
     use crate::rsraft::{CommandRequest, CommandResult, LogEntry};
     use crate::rsraft::raft_client::RaftClient;
     use crate::storage::{ApplyStorage, PersistentStateStorage};
-    use crate::util::{convert_to_payload, read_payload};
+    use crate::util::convert_to_payload;
 
     use super::*;
 
     fn leader_host<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>) -> String {
         let state = s1.read().unwrap();
-
         state.current_leader_id.clone()
     }
 
@@ -126,30 +127,149 @@ mod tests {
         return client.command(req).await.unwrap();
     }
 
-    fn read_command(payload: Vec<u8>) -> (String, u64) {
-        return read_payload(payload.as_slice());
-    }
+    // fn read_command(payload: Vec<u8>) -> (String, u64) {
+    //     return read_payload(payload.as_slice());
+    // }
 
     async fn eventually_assert<F>(mut f: F, timout_millis: u64) where
         F: FnMut() -> bool {
+        let flag = Arc::new(RwLock::new(false));
+        let flag_clone = flag.clone();
+        thread::spawn(move || {
+            sleep(Duration::from_millis(timout_millis));
+            let mut flag = flag_clone.write().unwrap();
+            *flag = true;
+        });
+
         let mut loop_interval = interval(Duration::from_millis(10));
         loop {
-            select! {
-                _ = tokio::time::sleep(Duration::from_millis(timout_millis)) => {
-                    panic!("timeout in this test case");
-                }
-                _ = loop_interval.tick() => {
-                    let success = f();
-                    if success {
-                        return;
-                    }
-                }
+            loop_interval.tick().await;
+            let success = f();
+            if success {
+                return;
+            }
+            let flag = flag.read().unwrap();
+            if *flag {
+                panic!("timeout");
             }
         }
     }
 
+    async fn assert_single_leader_elected(
+        s1: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s2: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+    ) {
+        println!("[CASE] Make sure the single leader is elected");
+        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
+        eventually_assert(move || {
+            let s1 = s1_clone.read().unwrap();
+            let s2 = s2_clone.read().unwrap();
+            let s3 = s3_clone.read().unwrap();
+            if s1.current_leader_id == "" {
+                return false;
+            }
+            let unified_leader = (s1.current_leader_id == s2.current_leader_id) && (s1.current_leader_id == s3.current_leader_id);
+            let unified_term = (s1.current_term == s2.current_term) && (s1.current_term == s3.current_term);
+            return unified_leader && unified_term;
+        }, 5000).await;
+    }
+
+    async fn assert_command_replicated(
+        s1: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s2: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        log_size: usize,
+    ) {
+        println!("[CASE] Make sure command replicated");
+        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
+        eventually_assert(move || {
+            let s1 = s1_clone.read().unwrap();
+            let s2 = s2_clone.read().unwrap();
+            let s3 = s3_clone.read().unwrap();
+            if s1.logs.len() < log_size {
+                return false;
+            }
+            let equals_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
+            let equals_commit_logs = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
+            return equals_logs && equals_commit_logs;
+        }, 1000).await;
+    }
+
+    fn kill_current_leader(leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
+        let mut state = leader_state.write().unwrap();
+        state.current_role = Dead;
+    }
+
+    fn recover_old_leader(old_leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
+        let mut state = old_leader_state.write().unwrap();
+        state.current_role = Leader;
+    }
+
+    async fn assert_new_member_elected_if_leader_failure(
+        leader_host: String,
+        other_members_states: Vec<&Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>>,
+    ) {
+        eventually_assert(move || {
+            let s1 = other_members_states[0].read().unwrap();
+            let s2 = other_members_states[1].read().unwrap();
+            if (s1.current_leader_id == leader_host) || (s2.current_leader_id == leader_host) {
+                return false;
+            }
+            return (s1.current_role == Leader && s2.current_role == Follower)
+                || (s1.current_role == Follower && s2.current_role == Leader);
+        }, 1000).await;
+    }
+
+    fn set_non_committed_log_to_old_leader(old_leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
+        let mut state = old_leader_state.write().unwrap();
+        // Set a non-committed log on the old leader
+        let current_term = state.current_term;
+        state.logs.push(LogEntry {
+            term: current_term,
+            payload: convert_to_payload(String::from("third"), 33),
+        });
+    }
+
+    async fn assert_old_leader_turn_follower(old_leader_state: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>) {
+        println!("[CASE] The old leader turns to Follower when the recovery");
+        eventually_assert(move || {
+            let state = old_leader_state.read().unwrap();
+            return state.current_role == Follower;
+        }, 1000).await;
+    }
+
+    async fn assert_commands_applied(
+        s1: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s2: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+        s3: Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>,
+    ) {
+        eventually_assert(move || {
+            let s1 = s1.read().unwrap();
+            let s2 = s2.read().unwrap();
+            let s3 = s3.read().unwrap();
+            let s1 = &s1.apply_storage.data;
+            let s2 = &s2.apply_storage.data;
+            let s3 = &s3.apply_storage.data;
+            let keys = vec!["first", "second", "third"];
+
+            for k in keys.iter() {
+                let r1 = s1.get(*k);
+                let r2 = s2.get(*k);
+                let r3 = s3.get(*k);
+                if r1.is_none() || r2.is_none() || r3.is_none() {
+                    return false;
+                }
+                if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
+                    return false;
+                }
+            }
+            return true;
+        }, 1000).await;
+    }
+
     #[tokio::test]
-    #[timeout(5000)]
+    #[timeout(10000)]
     async fn test_e2e() {
         // Initialize
         let (tx, rx) = channel(());
@@ -180,126 +300,39 @@ mod tests {
                 .await;
         });
 
-        // Make sure the single Leader is elected
-        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
-        eventually_assert(move || {
-            let s1 = s1_clone.read().unwrap();
-            let s2 = s2_clone.read().unwrap();
-            let s3 = s3_clone.read().unwrap();
-            if s1.current_leader_id == "" {
-                return false;
-            }
-            let unified_leader = (s1.current_leader_id == s2.current_leader_id) && (s1.current_leader_id == s3.current_leader_id);
-            let unified_term = (s1.current_term == s2.current_term) && (s1.current_term == s3.current_term);
-            return unified_leader && unified_term;
-        }, 1000).await;
+        assert_single_leader_elected(s1.clone(), s2.clone(), s3.clone()).await;
 
-        // Send command
+        // Send first command
         let res = submit_command(s1.clone(), String::from("first"), 1).await;
         assert_eq!(res.get_ref().success, true);
+        assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 1).await;
+
+        // Send second command
         let res = submit_command(s1.clone(), String::from("second"), 2).await;
         assert_eq!(res.get_ref().success, true);
-
-        // Commit check
-        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
-        eventually_assert(move || {
-            let s1 = s1_clone.read().unwrap();
-            let s2 = s2_clone.read().unwrap();
-            let s3 = s3_clone.read().unwrap();
-            if s1.logs.len() < 2 {
-                return false;
-            }
-            let unified_commit_index = (s1.commit_index == s2.commit_index) && (s1.commit_index == s3.commit_index);
-            let unified_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
-            return unified_commit_index && unified_logs;
-        }, 1000).await;
-        let leader_host = leader_host(s1.clone());
-        let leader_state = states_map.get(leader_host.as_str()).unwrap();
-        eventually_assert(move || {
-            let state = leader_state.read().unwrap();
-            return state.next_indexes.eq(vec![2, 2].as_slice());
-        }, 1000).await;
+        assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 2).await;
 
         // Leader Failure
+        let leader_host = leader_host(s1.clone());
         let leader_state = states_map.get(leader_host.as_str()).unwrap();
-        // Kill the Leader
-        {
-            let mut state = leader_state.write().unwrap();
-            state.current_role = Dead;
-        }
-        let states = states_map.iter()
+        kill_current_leader(leader_state.clone());
+        let other_members_states = states_map.iter()
             .filter(|(k, _)| (**k).ne(leader_host.as_str()))
             .map(|(_, v)| v)
             .collect::<Vec<&Arc<RwLock<RaftConsensusState<_, _>>>>>();
-        let arbitrary_state = states[0].clone();
-        // Check if a new Leader is elected
-        eventually_assert(move || {
-            let s1 = states[0].read().unwrap();
-            let s2 = states[1].read().unwrap();
-            if (s1.current_leader_id == leader_host) || (s2.current_leader_id == leader_host) {
-                return false;
-            }
-            return (s1.current_role == Leader && s2.current_role == Follower)
-                || (s1.current_role == Follower && s2.current_role == Leader);
-        }, 1000).await;
-        let res = submit_command(arbitrary_state.clone(), String::from("third"), 3).await;
+        assert_new_member_elected_if_leader_failure(leader_host, other_members_states.clone()).await;
+
+        let res = submit_command(other_members_states[0].clone(), String::from("third"), 3).await;
         assert_eq!(res.get_ref().success, true);
 
         // Old Leader Recovery
-        {
-            let mut state = leader_state.write().unwrap();
-            // Set a non-committed log on the old leader
-            let current_term = state.current_term;
-            state.logs.push(LogEntry {
-                term: current_term,
-                payload: convert_to_payload(String::from("third"), 33),
-            });
-            // Recover the old leader
-            state.current_role = Leader;
-        }
-        // Check if the old leader will turn to Follower
-        eventually_assert(move || {
-            let state = leader_state.read().unwrap();
-            return state.current_role == Follower;
-        }, 1000).await;
-
-        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
-        eventually_assert(move || {
-            let s1 = s1_clone.read().unwrap();
-            let s2 = s2_clone.read().unwrap();
-            let s3 = s3_clone.read().unwrap();
-            if s1.logs.len() != 3 {
-                return false;
-            }
-            let unified_log_size = (s1.logs.len() == s2.logs.len()) && (s1.logs.len() == s3.logs.len());
-            let unified_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
-            let (k, v) = read_command(s1.logs[2].payload.clone());
-            return unified_log_size && unified_logs && k == "third" && v == 3;
-        }, 1000).await;
+        set_non_committed_log_to_old_leader(leader_state.clone());
+        recover_old_leader(leader_state.clone());
+        assert_old_leader_turn_follower(leader_state.clone()).await;
+        assert_command_replicated(s1.clone(), s2.clone(), s3.clone(), 3).await;
 
         // Apply check
-        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
-        eventually_assert(move || {
-            let s1 = s1_clone.read().unwrap();
-            let s2 = s2_clone.read().unwrap();
-            let s3 = s3_clone.read().unwrap();
-            let s1 = &s1.apply_storage.data;
-            let s2 = &s2.apply_storage.data;
-            let s3 = &s3.apply_storage.data;
-            let keys = vec!["first", "second", "third"];
-            for k in keys.iter() {
-                let r1 = s1.get(*k);
-                let r2 = s2.get(*k);
-                let r3 = s3.get(*k);
-                if r1.is_none() || r2.is_none() || r3.is_none() {
-                    return false;
-                }
-                if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
-                    return false;
-                }
-            }
-            return true;
-        }, 1000).await;
+        assert_commands_applied(s1.clone(), s2.clone(), s3.clone()).await;
 
         tx.send(()).unwrap();
         r1.await.unwrap();

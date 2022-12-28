@@ -1,4 +1,5 @@
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use anyhow::Context;
 use tokio::sync::watch::Receiver;
@@ -6,7 +7,7 @@ use tonic::{Code, Request, Response, Status};
 use tonic::transport::Server;
 
 use crate::raft_state::RaftConsensusState;
-use crate::raft_state::RaftNodeRole::Dead;
+use crate::raft_state::RaftNodeRole::{Dead, Leader};
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, CommandResult, LeaderRequest, LeaderResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;
@@ -37,12 +38,39 @@ pub struct RaftServerHandler<P: PersistentStateStorage, A: ApplyStorage> {
 #[tonic::async_trait]
 impl<P: PersistentStateStorage, A: ApplyStorage> Raft for RaftServerHandler<P, A> {
     async fn command(&self, request: Request<CommandRequest>) -> Result<Response<CommandResult>, Status> {
+        {
+            let role = self.raft_state.read().unwrap().current_role;
+            if role != Leader {
+                return Ok(Response::new(CommandResult {
+                    success: false,
+                }));
+            }
+        }
         let args = request.get_ref();
-        let mut state = self.raft_state.write().unwrap();
-        let success = state.apply_command_request(args);
-        state.save_state_to_persistent_storage();
+        let success;
+        let last_index;
+        {
+            let mut state = self.raft_state.write().unwrap();
+            success = state.apply_command_request(args);
+            last_index = state.last_index();
+            state.save_state_to_persistent_storage();
+        }
+        if !success {
+            return Ok(Response::new(CommandResult {
+                success
+            }));
+        }
+
+        let state = self.raft_state.clone();
+        loop {
+            let commit_index = state.read().unwrap().commit_index;
+            if last_index <= commit_index {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         Ok(Response::new(CommandResult {
-            success
+            success: true,
         }))
     }
 
