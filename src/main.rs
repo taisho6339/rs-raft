@@ -280,35 +280,6 @@ mod tests {
         }, 5000).await;
     }
 
-    // async fn assert_commands_applied(
-    //     other_members_states: Vec<&Arc<RwLock<RaftConsensusState<MockInMemoryStorage, MockInMemoryKeyValueStore>>>>,
-    // ) {
-    //     eventually_assert(move || {
-    //         let s1 = other_members_states[0].clone().read().unwrap();
-    //
-    //         let s1 = s1.read().unwrap();
-    //         let s2 = s2.read().unwrap();
-    //         let s3 = s3.read().unwrap();
-    //         let s1 = &s1.apply_storage.data;
-    //         let s2 = &s2.apply_storage.data;
-    //         let s3 = &s3.apply_storage.data;
-    //         let keys = vec!["first", "second", "third", "forth"];
-    //
-    //         for k in keys.iter() {
-    //             let r1 = s1.get(*k);
-    //             let r2 = s2.get(*k);
-    //             let r3 = s3.get(*k);
-    //             if r1.is_none() || r2.is_none() || r3.is_none() {
-    //                 return false;
-    //             }
-    //             if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
-    //                 return false;
-    //             }
-    //         }
-    //         return true;
-    //     }, 5000).await;
-    // }
-
     #[tokio::test]
     #[timeout(10000)]
     async fn test_e2e() {
