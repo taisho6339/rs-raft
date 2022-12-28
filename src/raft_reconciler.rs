@@ -1,5 +1,5 @@
 use std::borrow::BorrowMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use chrono::Utc;
 use tokio::select;
@@ -16,14 +16,14 @@ const HEART_BEAT_TICK_DURATION_MILLIS: u64 = 50;
 const APPEND_ENTRIES_TICK_DURATION_MILLIS: u64 = 100;
 
 pub struct RaftReconciler {
-    state: Arc<Mutex<RaftConsensusState>>,
+    state: Arc<RwLock<RaftConsensusState>>,
     cluster_info: ClusterInfo,
     signal: Receiver<()>,
     client: RaftServiceClient,
 }
 
 impl RaftReconciler {
-    pub fn new(signal: Receiver<()>, cluster_info: ClusterInfo, state: Arc<Mutex<RaftConsensusState>>, client: RaftServiceClient) -> Self {
+    pub fn new(signal: Receiver<()>, cluster_info: ClusterInfo, state: Arc<RwLock<RaftConsensusState>>, client: RaftServiceClient) -> Self {
         Self {
             cluster_info,
             signal,
@@ -33,39 +33,39 @@ impl RaftReconciler {
     }
 
     fn current_role(&mut self) -> RaftNodeRole {
-        let state = self.state.borrow_mut().lock().unwrap();
+        let state = self.state.read().unwrap();
         state.current_role
     }
 
     fn received_granted(&mut self) -> i64 {
-        let state = self.state.borrow_mut().lock().unwrap();
+        let state = self.state.read().unwrap();
         state.received_granted
     }
 
     fn election_timeout_millis(&mut self) -> u64 {
-        let state = self.state.borrow_mut().lock().unwrap();
+        let state = self.state.read().unwrap();
         state.election_timeout.num_milliseconds() as u64
     }
 
     fn last_heartbeat_time_millis(&mut self) -> i64 {
-        let state = self.state.borrow_mut().lock().unwrap();
+        let state = self.state.read().unwrap();
         state.last_heartbeat_time.timestamp_millis()
     }
 
     fn update_commit_index(&mut self) {
         let mut state_ref = self.state.clone();
-        let mut state = state_ref.borrow_mut().lock().unwrap();
+        let mut state = state_ref.borrow_mut().write().unwrap();
         state.update_commit_index();
     }
 
     fn become_leader(&mut self) {
-        let mut state = self.state.borrow_mut().lock().unwrap();
+        let mut state = self.state.borrow_mut().write().unwrap();
         state.become_leader(self.cluster_info.node_id.clone());
     }
 
     fn become_candidate(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
-        let mut state = self.state.borrow_mut().lock().unwrap();
+        let mut state = self.state.borrow_mut().write().unwrap();
         println!("[INFO] Become a candidate on term: {}, {}", state.current_term, node_id);
         state.become_candidate(node_id);
     }
@@ -107,8 +107,8 @@ impl RaftReconciler {
                         println!("[INFO] Sending Append Entries requests...: {}", node_id);
                         {
                             let current_role;
-                            let mut state_clone = state_clone.clone();
-                            current_role = state_clone.borrow_mut().lock().unwrap().current_role;
+                            let state_clone = state_clone.clone();
+                            current_role = state_clone.read().unwrap().current_role;
                             if current_role != Leader {
                                 return;
                             }
@@ -139,8 +139,7 @@ impl RaftReconciler {
                         println!("[INFO] Sending heartbeats...: {}", node_id);
                         {
                             let current_role;
-                            let mut state_clone = state_clone.clone();
-                            current_role = state_clone.borrow_mut().lock().unwrap().current_role;
+                            current_role = state_clone.read().unwrap().current_role;
                             if current_role != Leader {
                                 return;
                             }

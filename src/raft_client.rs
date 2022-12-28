@@ -1,5 +1,5 @@
 use std::borrow::BorrowMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use tonic::transport::{Channel, Endpoint};
@@ -31,8 +31,8 @@ impl RaftServiceClient {
         }
     }
 
-    fn gen_append_entries_requests(&self, peer_index: usize, state: Arc<Mutex<RaftConsensusState>>) -> Option<AppendEntriesRequest> {
-        let mut state_clone = state.clone();
+    fn gen_append_entries_requests(&self, peer_index: usize, state: Arc<RwLock<RaftConsensusState>>) -> Option<AppendEntriesRequest> {
+        let state_clone = state.clone();
         let term;
         let leader_id;
         let prev_log_index;
@@ -40,7 +40,7 @@ impl RaftServiceClient {
         let leader_commit_index;
         let logs: Vec<LogEntry>;
         {
-            let state = state_clone.borrow_mut().lock().unwrap();
+            let state = state_clone.read().unwrap();
             let next_index = state.next_indexes[peer_index];
             let length = state.logs.len();
             // No logs to ship to the follower
@@ -83,7 +83,7 @@ impl RaftServiceClient {
         Some((peer_index, message.into_inner()))
     }
 
-    pub async fn send_append_entries_over_cluster(&self, state: Arc<Mutex<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_append_entries_over_cluster(&self, state: Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
         let state_clone1 = state.clone();
         let reqs = self.peers.iter()
             .enumerate()
@@ -101,8 +101,7 @@ impl RaftServiceClient {
         });
 
         while let Some(opt) = futures.next().await {
-            let mut state_clone = state.clone();
-            let mut state = state_clone.borrow_mut().lock().unwrap();
+            let mut state = state.write().unwrap();
             if state.current_role != Leader {
                 return;
             }
@@ -129,13 +128,12 @@ impl RaftServiceClient {
         Some(result)
     }
 
-    pub async fn send_request_vote_over_cluster(&self, state: Arc<Mutex<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_request_vote_over_cluster(&self, state: Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
         let current_term;
         let last_log_index;
         let last_log_term;
         {
-            let state_clone = state.clone();
-            let state = state_clone.lock().unwrap();
+            let state = state.read().unwrap();
             current_term = state.current_term;
             last_log_index = state.last_index();
             last_log_term = state.last_log_term();
@@ -154,8 +152,7 @@ impl RaftServiceClient {
         });
 
         while let Some(result) = futures.next().await {
-            let mut state_clone = state.clone();
-            let mut state = state_clone.borrow_mut().lock().unwrap();
+            let mut state = state.write().unwrap();
             if state.current_role != Candidate {
                 return;
             }
@@ -180,12 +177,11 @@ impl RaftServiceClient {
         Some(result)
     }
 
-    pub async fn send_heartbeat_over_cluster(&self, state: Arc<Mutex<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_heartbeat_over_cluster(&self, state: Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
         let term;
         let leader_commit_index;
         {
-            let mut state_clone = state.clone();
-            let state = state_clone.borrow_mut().lock().unwrap();
+            let state = state.read().unwrap();
             if state.current_role != Leader {
                 return;
             }
@@ -209,7 +205,7 @@ impl RaftServiceClient {
 
         while let Some(result) = futures.next().await {
             let mut state_clone = state.clone();
-            let mut state = state_clone.borrow_mut().lock().unwrap();
+            let mut state = state_clone.borrow_mut().write().unwrap();
             if state.current_role != Leader {
                 return;
             }

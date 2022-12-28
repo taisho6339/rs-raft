@@ -1,5 +1,4 @@
-use std::borrow::BorrowMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Context;
 use tokio::sync::watch::Receiver;
@@ -31,15 +30,14 @@ pub struct RaftServerDaemon {
 }
 
 pub struct RaftServerHandler {
-    raft_state: Arc<Mutex<RaftConsensusState>>,
+    raft_state: Arc<RwLock<RaftConsensusState>>,
 }
 
 #[tonic::async_trait]
 impl Raft for RaftServerHandler {
     async fn command(&self, request: Request<CommandRequest>) -> Result<Response<CommandResult>, Status> {
         let args = request.get_ref();
-        let mut state_clone = self.raft_state.clone();
-        let mut state = state_clone.borrow_mut().lock().unwrap();
+        let mut state = self.raft_state.write().unwrap();
         let success = state.apply_command_request(args);
         state.save_state_to_persistent_storage();
         Ok(Response::new(CommandResult {
@@ -48,8 +46,7 @@ impl Raft for RaftServerHandler {
     }
 
     async fn leader(&self, _request: Request<LeaderRequest>) -> Result<Response<LeaderResult>, Status> {
-        let mut state_clone = self.raft_state.clone();
-        let state = state_clone.borrow_mut().lock().unwrap();
+        let state = self.raft_state.read().unwrap();
         Ok(Response::new(LeaderResult {
             leader: state.current_leader_id.clone(),
         }))
@@ -59,8 +56,7 @@ impl Raft for RaftServerHandler {
         &self,
         request: Request<RequestVoteRequest>,
     ) -> Result<Response<RequestVoteResult>, Status> {
-        let sc = self.raft_state.clone();
-        let mut state = sc.lock().unwrap();
+        let mut state = self.raft_state.write().unwrap();
         if state.current_role == Dead {
             return Err(Status::new(Code::Unavailable, "This node is dead"));
         }
@@ -77,8 +73,7 @@ impl Raft for RaftServerHandler {
         &self,
         request: Request<AppendEntriesRequest>,
     ) -> Result<Response<AppendEntriesResult>, Status> {
-        let sc = self.raft_state.clone();
-        let mut state = sc.lock().unwrap();
+        let mut state = self.raft_state.write().unwrap();
         if state.current_role == Dead {
             return Err(Status::new(Code::Unavailable, "This node is dead"));
         }
@@ -99,7 +94,7 @@ impl RaftServerDaemon {
         }
     }
 
-    pub async fn start_server(&mut self, mut signal: Receiver<()>, raft_state: Arc<Mutex<RaftConsensusState>>) -> anyhow::Result<()> {
+    pub async fn start_server(&mut self, mut signal: Receiver<()>, raft_state: Arc<RwLock<RaftConsensusState>>) -> anyhow::Result<()> {
         let conf = &self.config;
         let addr = format!("[::1]:{}", conf.port).parse().context("failed to parse addr")?;
         let handler = RaftServerHandler {

@@ -3,3 +3,7 @@ pub trait PersistentStateStorage<K, V>: Send {
     fn set(&mut self, key: K, value: V);
     fn has_data(&self) -> bool;
 }
+
+pub trait ApplyStorage<K, V>: Send {
+
+}

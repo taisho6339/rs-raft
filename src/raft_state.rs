@@ -50,7 +50,7 @@ pub struct RaftConsensusState {
     pub next_indexes: Vec<i64>,
     pub match_indexes: Vec<i64>,
 
-    pub storage: Box<dyn PersistentStateStorage<String, Vec<u8>>>,
+    pub storage: Box<dyn PersistentStateStorage<String, Vec<u8>> + Send + Sync>,
 }
 
 fn randomized_timeout_duration(base_millis: i64) -> Duration {
@@ -130,7 +130,7 @@ impl Default for RaftConsensusState {
 }
 
 impl RaftConsensusState {
-    pub(crate) fn new(other_peers_size: usize, storage: Box<dyn PersistentStateStorage<String, Vec<u8>>>) -> Self {
+    pub(crate) fn new(other_peers_size: usize, storage: Box<dyn PersistentStateStorage<String, Vec<u8>> + Send + Sync>) -> Self {
         let mut state = RaftConsensusState::default();
         state.initialize_indexes(other_peers_size);
         state.storage = storage;
