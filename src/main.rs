@@ -106,7 +106,7 @@ mod tests {
     use crate::rsraft::{CommandRequest, CommandResult, LogEntry};
     use crate::rsraft::raft_client::RaftClient;
     use crate::storage::{ApplyStorage, PersistentStateStorage};
-    use crate::util::read_le_u64;
+    use crate::util::{convert_to_payload, read_payload};
 
     use super::*;
 
@@ -116,14 +116,18 @@ mod tests {
         state.current_leader_id.clone()
     }
 
-    async fn submit_command<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>, payload: u64) -> Response<CommandResult> {
+    async fn submit_command<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>, key: String, payload: u64) -> Response<CommandResult> {
         let leader_host = format!("http://{}", leader_host(s1.clone()));
         let mut client = RaftClient::connect(leader_host).await.unwrap();
-        let payload = (payload as u64).to_le_bytes().to_vec();
+        let payload = convert_to_payload(key, payload);
         let req = tonic::Request::new(CommandRequest {
             payload,
         });
         return client.command(req).await.unwrap();
+    }
+
+    fn read_command(payload: Vec<u8>) -> (String, u64) {
+        return read_payload(payload.as_slice());
     }
 
     async fn eventually_assert<F>(mut f: F, timout_millis: u64) where
@@ -191,9 +195,9 @@ mod tests {
         }, 1000).await;
 
         // Send command
-        let res = submit_command(s1.clone(), 1).await;
+        let res = submit_command(s1.clone(), String::from("first"), 1).await;
         assert_eq!(res.get_ref().success, true);
-        let res = submit_command(s1.clone(), 2).await;
+        let res = submit_command(s1.clone(), String::from("second"), 2).await;
         assert_eq!(res.get_ref().success, true);
 
         // Commit check
@@ -238,7 +242,7 @@ mod tests {
             return (s1.current_role == Leader && s2.current_role == Follower)
                 || (s1.current_role == Follower && s2.current_role == Leader);
         }, 1000).await;
-        let res = submit_command(arbitrary_state.clone(), 3).await;
+        let res = submit_command(arbitrary_state.clone(), String::from("third"), 3).await;
         assert_eq!(res.get_ref().success, true);
 
         // Old Leader Recovery
@@ -248,7 +252,7 @@ mod tests {
             let current_term = state.current_term;
             state.logs.push(LogEntry {
                 term: current_term,
-                payload: (33 as u64).to_le_bytes().to_vec(),
+                payload: convert_to_payload(String::from("third"), 33),
             });
             // Recover the old leader
             state.current_role = Leader;
@@ -269,8 +273,32 @@ mod tests {
             }
             let unified_log_size = (s1.logs.len() == s2.logs.len()) && (s1.logs.len() == s3.logs.len());
             let unified_logs = (s1.logs == s2.logs) && (s1.logs == s3.logs);
-            let value = read_le_u64(&mut s1.logs[2].payload.as_slice());
-            return unified_log_size && unified_logs && value == 3;
+            let (k, v) = read_command(s1.logs[2].payload.clone());
+            return unified_log_size && unified_logs && k == "third" && v == 3;
+        }, 1000).await;
+
+        // Apply check
+        let (s1_clone, s2_clone, s3_clone) = (s1.clone(), s2.clone(), s3.clone());
+        eventually_assert(move || {
+            let s1 = s1_clone.read().unwrap();
+            let s2 = s2_clone.read().unwrap();
+            let s3 = s3_clone.read().unwrap();
+            let s1 = &s1.apply_storage.data;
+            let s2 = &s2.apply_storage.data;
+            let s3 = &s3.apply_storage.data;
+            let keys = vec!["first", "second", "third"];
+            for k in keys.iter() {
+                let r1 = s1.get(*k);
+                let r2 = s2.get(*k);
+                let r3 = s3.get(*k);
+                if r1.is_none() || r2.is_none() || r3.is_none() {
+                    return false;
+                }
+                if (r1.unwrap() != r2.unwrap()) || (r1.unwrap() != r3.unwrap()) {
+                    return false;
+                }
+            }
+            return true;
         }, 1000).await;
 
         tx.send(()).unwrap();

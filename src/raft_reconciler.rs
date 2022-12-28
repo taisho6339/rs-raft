@@ -203,6 +203,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
                         RaftNodeRole::Follower => {
                             println!("[INFO] Reconcile Follower: {}", node_id);
                             self.reconcile_election_timeout();
+                            self.reconcile_apply();
                         }
                         RaftNodeRole::Candidate => {
                             println!("[INFO] Reconcile Candidate: {}", node_id);

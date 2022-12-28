@@ -37,15 +37,9 @@ impl PersistentStateStorage for MockInMemoryStorage {
     }
 }
 
-
-// expected structure
-// key_size: 8 bytes
-// value_size: 8 bytes
-// key
-// value
-
+#[derive(Clone)]
 pub struct MockInMemoryKeyValueStore {
-    data: HashMap<String, u64>,
+    pub data: HashMap<String, u64>,
 }
 
 impl MockInMemoryKeyValueStore {
@@ -64,6 +58,11 @@ impl ApplyStorage for MockInMemoryKeyValueStore {
         }
     }
 
+    // expected structure
+    // key_size: 8 bytes
+    // value_size: 8 bytes
+    // key
+    // value
     fn apply(&mut self, payload: Vec<u8>) -> crate::storage::Result<()> {
         let bytes = payload.as_slice();
         let key_size = read_le_u64(&mut &bytes[0..8]);

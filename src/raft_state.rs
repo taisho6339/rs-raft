@@ -500,6 +500,8 @@ mod tests {
         let apply_storage = MockInMemoryKeyValueStore::new();
         let mut state = RaftConsensusState::new(2, storage, apply_storage);
         state.become_candidate(String::from("candidate"));
+
+        // Rejected by the older term -> turn to Follower
         state.apply_request_vote_result(RequestVoteResult {
             term: 2,
             vote_granted: false,
@@ -508,6 +510,7 @@ mod tests {
         assert_eq!(state.current_term, 2);
         assert_eq!(state.received_granted, 0);
 
+        // Rejected but same term
         state.become_candidate(String::from("candidate"));
         state.apply_request_vote_result(RequestVoteResult {
             term: 2,
@@ -517,6 +520,7 @@ mod tests {
         assert_eq!(state.current_term, 3);
         assert_eq!(state.received_granted, 1);
 
+        // Granted
         state.apply_request_vote_result(RequestVoteResult {
             term: 2,
             vote_granted: true,
@@ -561,6 +565,7 @@ mod tests {
             term: 0,
             payload: (100 as u64).to_le_bytes().to_vec(),
         });
+        // Success
         state.apply_append_entries_result(0, AppendEntriesResult {
             success: true,
             term: 0,
@@ -568,12 +573,14 @@ mod tests {
         assert_eq!(state.next_indexes[0], 1);
         assert_eq!(state.match_indexes[0], 0);
 
+        // Failed due to no-matching
         state.apply_append_entries_result(0, AppendEntriesResult {
             success: false,
             term: 0,
         });
         assert_eq!(state.next_indexes[0], 0);
 
+        // Failed due to the older term
         state.apply_append_entries_result(0, AppendEntriesResult {
             success: false,
             term: 1,
@@ -600,6 +607,7 @@ mod tests {
                 payload: (100 as u64).to_le_bytes().to_vec(),
             }
         );
+        // Reject due to the too old term
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 0,
             last_log_term: -1,
@@ -608,6 +616,7 @@ mod tests {
         });
         assert_eq!(granted, false);
 
+        // Reject due to the too old log term
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 1,
             last_log_term: -1,
@@ -616,6 +625,7 @@ mod tests {
         });
         assert_eq!(granted, false);
 
+        // Reject due to the too old log index
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 1,
             last_log_term: 1,
@@ -624,6 +634,7 @@ mod tests {
         });
         assert_eq!(granted, false);
 
+        // Grant
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 1,
             last_log_term: 1,
@@ -633,6 +644,7 @@ mod tests {
         assert_eq!(granted, true);
         assert_eq!(state.voted_for, "candidate");
 
+        // Grant for duplicated requests
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 1,
             last_log_term: 1,
@@ -641,6 +653,7 @@ mod tests {
         });
         assert_eq!(granted, true);
 
+        // Reject because already granted the other
         let granted = state.apply_request_vote_request(&RequestVoteRequest {
             term: 1,
             last_log_term: 2,
