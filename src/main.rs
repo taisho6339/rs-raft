@@ -1,3 +1,4 @@
+use std::env;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 
@@ -68,8 +69,15 @@ async fn run_process<F: Future<Output=()>, P: PersistentStateStorage, A: ApplySt
 async fn main() -> Result<()> {
     let mut sig_term = signal(SignalKind::terminate()).context("failed to setup SIGTERM channel")?;
     let mut sig_int = signal(SignalKind::interrupt()).context("failed to setup SIGINT channel")?;
+    let mut port = env::var("RAFT_RPC_PORT");
+    let port_number;
+    if port.is_err() {
+        port_number = 8080;
+    } else {
+        port_number = port.unwrap().parse::<u16>().expect("failed to parse the port number");
+    }
     let config = RaftServerConfig {
-        port: 8080,
+        port: port_number,
     };
     let signal = async {
         select! {
@@ -81,13 +89,13 @@ async fn main() -> Result<()> {
             }
         }
     };
-    let this_node_id = "localhost:8080";
+    let this_node_id = format!("localhost:{}", port_number);
     let other_hosts = vec![];
     let storage = MockInMemoryStorage::new();
     let apply_storage = MockInMemoryKeyValueStore::new();
     let state = RaftConsensusState::new(0, storage, apply_storage);
     let raft_state = Arc::new(RwLock::new(state));
-    run_process(signal, String::from(this_node_id), other_hosts, config, raft_state).await?;
+    run_process(signal, this_node_id, other_hosts, config, raft_state).await?;
 
     Ok(())
 }
