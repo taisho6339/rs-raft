@@ -910,6 +910,7 @@ dependencies = [
  "ntest",
  "prost",
  "rand",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",

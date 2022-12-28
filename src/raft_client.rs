@@ -7,6 +7,7 @@ use crate::raft_state::RaftNodeRole::{Candidate, Leader};
 use crate::RaftConsensusState;
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, LogEntry, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_client::RaftClient;
+use crate::storage::{ApplyStorage, PersistentStateStorage};
 
 #[derive(Clone)]
 pub struct RaftServiceClient {
@@ -30,7 +31,7 @@ impl RaftServiceClient {
         }
     }
 
-    fn gen_append_entries_requests(&self, peer_index: usize, state: &Arc<RwLock<RaftConsensusState>>) -> Option<AppendEntriesRequest> {
+    fn gen_append_entries_requests<P: PersistentStateStorage, A: ApplyStorage>(&self, peer_index: usize, state: &Arc<RwLock<RaftConsensusState<P, A>>>) -> Option<AppendEntriesRequest> {
         let term;
         let leader_id;
         let prev_log_index;
@@ -81,7 +82,7 @@ impl RaftServiceClient {
         Some((peer_index, message.into_inner()))
     }
 
-    pub async fn send_append_entries_over_cluster(&self, state: &Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_append_entries_over_cluster<P: PersistentStateStorage, A: ApplyStorage>(&self, state: &Arc<RwLock<RaftConsensusState<P, A>>>, timeout_millis: u64) {
         let reqs = self.peers.iter()
             .enumerate()
             .map(|(i, _)| self.gen_append_entries_requests(i, &state))
@@ -125,7 +126,7 @@ impl RaftServiceClient {
         Some(result)
     }
 
-    pub async fn send_request_vote_over_cluster(&self, state: &Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_request_vote_over_cluster<P: PersistentStateStorage, A: ApplyStorage>(&self, state: &Arc<RwLock<RaftConsensusState<P, A>>>, timeout_millis: u64) {
         let current_term;
         let last_log_index;
         let last_log_term;
@@ -174,7 +175,7 @@ impl RaftServiceClient {
         Some(result)
     }
 
-    pub async fn send_heartbeat_over_cluster(&self, state: &Arc<RwLock<RaftConsensusState>>, timeout_millis: u64) {
+    pub async fn send_heartbeat_over_cluster<P: PersistentStateStorage, A: ApplyStorage>(&self, state: &Arc<RwLock<RaftConsensusState<P, A>>>, timeout_millis: u64) {
         let term;
         let leader_commit_index;
         {

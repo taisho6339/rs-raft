@@ -9,20 +9,21 @@ use crate::{ClusterInfo, RaftConsensusState};
 use crate::raft_client::RaftServiceClient;
 use crate::raft_state::RaftNodeRole;
 use crate::raft_state::RaftNodeRole::Leader;
+use crate::storage::{ApplyStorage, PersistentStateStorage};
 
 const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
 const HEART_BEAT_TICK_DURATION_MILLIS: u64 = 50;
 const APPEND_ENTRIES_TICK_DURATION_MILLIS: u64 = 100;
 
-pub struct RaftReconciler {
-    state: Arc<RwLock<RaftConsensusState>>,
+pub struct RaftReconciler<P: PersistentStateStorage, A: ApplyStorage> {
+    state: Arc<RwLock<RaftConsensusState<P, A>>>,
     cluster_info: ClusterInfo,
     signal: Receiver<()>,
     client: RaftServiceClient,
 }
 
-impl RaftReconciler {
-    pub fn new(signal: Receiver<()>, cluster_info: ClusterInfo, state: Arc<RwLock<RaftConsensusState>>, client: RaftServiceClient) -> Self {
+impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
+    pub fn new(signal: Receiver<()>, cluster_info: ClusterInfo, state: Arc<RwLock<RaftConsensusState<P, A>>>, client: RaftServiceClient) -> Self {
         Self {
             cluster_info,
             signal,

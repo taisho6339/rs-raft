@@ -10,6 +10,7 @@ use crate::raft_state::RaftNodeRole::Dead;
 use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, CommandRequest, CommandResult, LeaderRequest, LeaderResult, RequestVoteRequest, RequestVoteResult};
 use crate::rsraft::raft_server::Raft;
 use crate::rsraft::raft_server::RaftServer;
+use crate::storage::{ApplyStorage, PersistentStateStorage};
 
 #[derive(Debug)]
 pub struct RaftServerConfig {
@@ -29,12 +30,12 @@ pub struct RaftServerDaemon {
     config: RaftServerConfig,
 }
 
-pub struct RaftServerHandler {
-    raft_state: Arc<RwLock<RaftConsensusState>>,
+pub struct RaftServerHandler<P: PersistentStateStorage, A: ApplyStorage> {
+    raft_state: Arc<RwLock<RaftConsensusState<P, A>>>,
 }
 
 #[tonic::async_trait]
-impl Raft for RaftServerHandler {
+impl<P: PersistentStateStorage, A: ApplyStorage> Raft for RaftServerHandler<P, A> {
     async fn command(&self, request: Request<CommandRequest>) -> Result<Response<CommandResult>, Status> {
         let args = request.get_ref();
         let mut state = self.raft_state.write().unwrap();
@@ -94,7 +95,7 @@ impl RaftServerDaemon {
         }
     }
 
-    pub async fn start_server(&mut self, mut signal: Receiver<()>, raft_state: Arc<RwLock<RaftConsensusState>>) -> anyhow::Result<()> {
+    pub async fn start_server<P: PersistentStateStorage, A: ApplyStorage>(&mut self, mut signal: Receiver<()>, raft_state: Arc<RwLock<RaftConsensusState<P, A>>>) -> anyhow::Result<()> {
         let conf = &self.config;
         let addr = format!("[::1]:{}", conf.port).parse().context("failed to parse addr")?;
         let handler = RaftServerHandler {

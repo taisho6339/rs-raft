@@ -11,6 +11,7 @@ use crate::raft_client::RaftServiceClient;
 use crate::raft_reconciler::RaftReconciler;
 use crate::raft_server::{RaftServerConfig, RaftServerDaemon};
 use crate::raft_state::{ClusterInfo, RaftConsensusState};
+use crate::storage::{ApplyStorage, PersistentStateStorage};
 
 mod raft_state;
 mod raft_reconciler;
@@ -25,7 +26,13 @@ mod inmemory_storage;
 //     tonic::include_proto!("rsraft"); // The string specified here must match the proto package name
 // }
 
-async fn run_process<F: Future<Output=()>>(close_signal: F, node_id: String, other_hosts: Vec<&'static str>, server_config: RaftServerConfig, raft_state: Arc<RwLock<RaftConsensusState>>) -> Result<()> {
+async fn run_process<F: Future<Output=()>, P: PersistentStateStorage, A: ApplyStorage>(
+    close_signal: F,
+    node_id: String,
+    other_hosts: Vec<&'static str>,
+    server_config: RaftServerConfig,
+    raft_state: Arc<RwLock<RaftConsensusState<P, A>>>,
+) -> Result<()> {
     let (tx, rx) = watch::channel(());
     let rx1 = rx.clone();
     let rx2 = rx.clone();
@@ -76,7 +83,9 @@ async fn main() -> Result<()> {
     };
     let this_node_id = "localhost:8080";
     let other_hosts = vec![];
-    let state = RaftConsensusState::new(0, Box::new(MockInMemoryStorage::new()));
+    let storage = MockInMemoryStorage::new();
+    let apply_storage = MockInMemoryStorage::new();
+    let state = RaftConsensusState::new(0, storage, apply_storage);
     let raft_state = Arc::new(RwLock::new(state));
     run_process(signal, String::from(this_node_id), other_hosts, config, raft_state).await?;
 
@@ -96,17 +105,18 @@ mod tests {
     use crate::raft_state::RaftNodeRole::{Dead, Follower, Leader};
     use crate::rsraft::{CommandRequest, CommandResult, LogEntry};
     use crate::rsraft::raft_client::RaftClient;
+    use crate::storage::{ApplyStorage, PersistentStateStorage};
     use crate::util::read_le_u64;
 
     use super::*;
 
-    fn leader_host(s1: Arc<RwLock<RaftConsensusState>>) -> String {
+    fn leader_host<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>) -> String {
         let state = s1.read().unwrap();
 
         state.current_leader_id.clone()
     }
 
-    async fn submit_command(s1: Arc<RwLock<RaftConsensusState>>, payload: u64) -> Response<CommandResult> {
+    async fn submit_command<P: PersistentStateStorage, A: ApplyStorage>(s1: Arc<RwLock<RaftConsensusState<P, A>>>, payload: u64) -> Response<CommandResult> {
         let leader_host = format!("http://{}", leader_host(s1.clone()));
         let mut client = RaftClient::connect(leader_host).await.unwrap();
         let payload = (payload as u64).to_le_bytes().to_vec();
@@ -142,9 +152,9 @@ mod tests {
         let mut rx1_clone = rx.clone();
         let mut rx2_clone = rx.clone();
         let mut rx3_clone = rx.clone();
-        let s1 = Arc::new(RwLock::new(RaftConsensusState::new(2, Box::new(MockInMemoryStorage::new()))));
-        let s2 = Arc::new(RwLock::new(RaftConsensusState::new(2, Box::new(MockInMemoryStorage::new()))));
-        let s3 = Arc::new(RwLock::new(RaftConsensusState::new(2, Box::new(MockInMemoryStorage::new()))));
+        let s1 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
+        let s2 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
+        let s3 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
         let mut states_map = HashMap::new();
         states_map.insert("localhost:8070", s1.clone());
         states_map.insert("localhost:8080", s2.clone());
@@ -216,7 +226,7 @@ mod tests {
         let states = states_map.iter()
             .filter(|(k, _)| (**k).ne(leader_host.as_str()))
             .map(|(_, v)| v)
-            .collect::<Vec<&Arc<RwLock<RaftConsensusState>>>>();
+            .collect::<Vec<&Arc<RwLock<RaftConsensusState<_, _>>>>>();
         let arbitrary_state = states[0].clone();
         // Check if a new Leader is elected
         eventually_assert(move || {
