@@ -208,6 +208,21 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         }
     }
 
+    pub fn apply_committed_logs(&mut self) {
+        if self.commit_index <= self.last_applied {
+            return;
+        }
+        let start = self.last_applied;
+        for i in (start + 1)..=self.commit_index {
+            let payload = &self.logs[i as usize];
+            let result = self.apply_storage.apply(payload.payload.clone());
+            if result.is_err() {
+                return;
+            }
+            self.last_applied += 1;
+        }
+    }
+
     fn restore_state_from_persistent_storage(&mut self) {
         let term_bytes = self.storage.get(String::from("current_term"));
         if let Some(term_bytes) = term_bytes {
@@ -335,14 +350,14 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{MockInMemoryStorage, RaftConsensusState};
+    use crate::{MockInMemoryKeyValueStore, MockInMemoryStorage, RaftConsensusState};
     use crate::raft_state::RaftNodeRole::{Candidate, Follower, Leader};
     use crate::rsraft::{AppendEntriesRequest, AppendEntriesResult, LogEntry, RequestVoteRequest, RequestVoteResult};
     use crate::util::read_le_u64;
 
     #[test]
     fn test_initialize_indexes() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         assert_eq!(state.match_indexes, vec![-1, -1]);
         assert_eq!(state.next_indexes, vec![0, 0]);
@@ -350,7 +365,7 @@ mod tests {
 
     #[test]
     fn test_last_log() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_follower(1);
         assert_eq!(state.last_log_term(), -1);
@@ -375,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_become_follower() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_follower(1);
         assert_eq!(state.current_term, 1);
@@ -392,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_become_candidate() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_candidate(String::from("candidate"));
         assert_eq!(state.current_term, 1);
@@ -409,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_become_leader() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.next_indexes = vec![2, 2];
         state.match_indexes = vec![1, 1];
@@ -428,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_update_commit_index() {
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.logs.push(LogEntry {
             term: 1,
@@ -467,7 +482,7 @@ mod tests {
     #[test]
     fn test_apply_heartbeat_result() {
         // initialize
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_leader(String::from("leader"));
         state.apply_heartbeat_result(AppendEntriesResult {
@@ -482,7 +497,7 @@ mod tests {
     fn test_request_vote_result() {
         // initialize
         let storage = MockInMemoryStorage::new();
-        let apply_storage = MockInMemoryStorage::new();
+        let apply_storage = MockInMemoryKeyValueStore::new();
         let mut state = RaftConsensusState::new(2, storage, apply_storage);
         state.become_candidate(String::from("candidate"));
         state.apply_request_vote_result(RequestVoteResult {
@@ -514,7 +529,7 @@ mod tests {
     #[test]
     fn test_persistent_storage() {
         let storage = MockInMemoryStorage::new();
-        let apply_storage = MockInMemoryStorage::new();
+        let apply_storage = MockInMemoryKeyValueStore::new();
         let mut state = RaftConsensusState::new(2, storage, apply_storage);
         state.become_follower(1);
         state.apply_request_vote_request(&RequestVoteRequest {
@@ -539,7 +554,7 @@ mod tests {
     #[test]
     fn test_apply_append_entries_result() {
         // initialize
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_leader(String::from("leader"));
         state.logs.push(LogEntry {
@@ -570,7 +585,7 @@ mod tests {
     #[test]
     fn test_apply_request_vote_request() {
         // initialize
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.initialize_indexes(2);
         state.become_follower(1);
         state.logs.push(
@@ -638,7 +653,7 @@ mod tests {
     #[test]
     fn test_apply_append_entries_request() {
         // initialize
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryStorage>::default();
+        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
         state.apply_append_entries_request(&AppendEntriesRequest {
             term: 1,
             leader_id: String::from("leader"),

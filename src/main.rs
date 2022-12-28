@@ -6,7 +6,7 @@ use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 
-use crate::inmemory_storage::MockInMemoryStorage;
+use crate::inmemory_storage::{MockInMemoryKeyValueStore, MockInMemoryStorage};
 use crate::raft_client::RaftServiceClient;
 use crate::raft_reconciler::RaftReconciler;
 use crate::raft_server::{RaftServerConfig, RaftServerDaemon};
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let this_node_id = "localhost:8080";
     let other_hosts = vec![];
     let storage = MockInMemoryStorage::new();
-    let apply_storage = MockInMemoryStorage::new();
+    let apply_storage = MockInMemoryKeyValueStore::new();
     let state = RaftConsensusState::new(0, storage, apply_storage);
     let raft_state = Arc::new(RwLock::new(state));
     run_process(signal, String::from(this_node_id), other_hosts, config, raft_state).await?;
@@ -152,9 +152,9 @@ mod tests {
         let mut rx1_clone = rx.clone();
         let mut rx2_clone = rx.clone();
         let mut rx3_clone = rx.clone();
-        let s1 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
-        let s2 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
-        let s3 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryStorage::new())));
+        let s1 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryKeyValueStore::new())));
+        let s2 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryKeyValueStore::new())));
+        let s3 = Arc::new(RwLock::new(RaftConsensusState::new(2, MockInMemoryStorage::new(), MockInMemoryKeyValueStore::new())));
         let mut states_map = HashMap::new();
         states_map.insert("localhost:8070", s1.clone());
         states_map.insert("localhost:8080", s2.clone());

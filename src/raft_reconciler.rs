@@ -173,6 +173,11 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
         self.update_commit_index();
     }
 
+    fn reconcile_apply(&mut self) {
+        let mut state = self.state.write().unwrap();
+        state.apply_committed_logs();
+    }
+
     pub async fn reconcile_loop(&mut self) {
         let node_id = self.cluster_info.node_id.clone();
         println!("[INFO] Start reconcile loop: {}", node_id);
@@ -193,7 +198,7 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
                         RaftNodeRole::Leader => {
                             println!("[INFO] Reconcile Leader: {}", node_id);
                             self.reconcile_commit_index();
-                            // TODO: add implementation to apply the state to some storage
+                            self.reconcile_apply();
                         }
                         RaftNodeRole::Follower => {
                             println!("[INFO] Reconcile Follower: {}", node_id);
