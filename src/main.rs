@@ -74,13 +74,14 @@ async fn main() -> Result<()> {
     init_logger();
     let mut sig_term = signal(SignalKind::terminate()).context("failed to setup SIGTERM channel")?;
     let mut sig_int = signal(SignalKind::interrupt()).context("failed to setup SIGINT channel")?;
-    let port = env::var("RAFT_RPC_PORT");
-    let port_number;
-    if port.is_err() {
-        port_number = 8080;
-    } else {
-        port_number = port.unwrap().parse::<u16>().expect("failed to parse the port number");
-    }
+
+    let port = env::var("RAFT_RPC_PORT").unwrap_or(String::from("8080"));
+    let port_number = port.parse::<u16>().expect("failed to parse the port number");
+    let other_hosts = env::var("OTHER_NODES").unwrap_or(String::from(""));
+    let other_hosts: Vec<&str> = other_hosts.split(",").collect();
+    info!("RPC PORT: {}", port_number);
+    info!("OTHER_HOSTS: {:?}", other_hosts);
+
     let config = RaftServerConfig {
         port: port_number,
     };
