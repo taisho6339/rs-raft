@@ -31,7 +31,7 @@ impl RaftServiceClient {
         }
     }
 
-    fn gen_append_entries_requests<P: PersistentStateStorage, A: ApplyStorage>(&self, peer_index: usize, state: &Arc<RwLock<RaftConsensusState<P, A>>>) -> Option<AppendEntriesRequest> {
+    fn gen_append_entries_requests<P: PersistentStateStorage, A: ApplyStorage>(&self, peer_index: usize, state: &Arc<RwLock<RaftConsensusState<P, A>>>) -> AppendEntriesRequest {
         let term;
         let leader_id;
         let prev_log_index;
@@ -41,33 +41,25 @@ impl RaftServiceClient {
         {
             let state = state.read().unwrap();
             let next_index = state.next_indexes[peer_index];
-            let length = state.logs.len();
-            // No logs to ship to the follower
-            if next_index >= (length as i64) {
-                return None;
-            }
-
             prev_log_index = next_index - 1;
             if prev_log_index >= 0 {
                 prev_log_term = state.logs[prev_log_index as usize].term;
             } else {
                 prev_log_term = -1;
             }
-
             leader_id = self.node_id.clone();
             term = state.current_term;
             logs = (&state.logs)[next_index as usize..].to_vec();
             leader_commit_index = state.commit_index;
         }
-
-        Some(AppendEntriesRequest {
+        AppendEntriesRequest {
             term,
             leader_id,
             prev_log_term,
             prev_log_index,
             leader_commit_index,
             logs,
-        })
+        }
     }
 
     async fn append_entries(&self, peer_index: usize, req: AppendEntriesRequest, timeout_millis: u64) -> Option<(usize, AppendEntriesResult)> {
@@ -86,14 +78,11 @@ impl RaftServiceClient {
         let reqs = self.peers.iter()
             .enumerate()
             .map(|(i, _)| self.gen_append_entries_requests(i, &state))
-            .collect::<Vec<Option<AppendEntriesRequest>>>();
+            .collect::<Vec<AppendEntriesRequest>>();
 
         let mut futures = FuturesUnordered::new();
         reqs.iter().enumerate().for_each(|(i, r)| {
-            if r.is_none() {
-                return;
-            }
-            let req = r.clone().unwrap();
+            let req = r.clone();
             let fut = self.append_entries(i, req, timeout_millis);
             futures.push(fut);
         });
@@ -158,58 +147,6 @@ impl RaftServiceClient {
                 continue;
             }
             state.apply_request_vote_result(result.unwrap());
-            state.save_state_to_persistent_storage();
-        }
-    }
-
-    async fn heartbeat(&self, peer_index: usize, req: AppendEntriesRequest, timeout_millis: u64) -> Option<AppendEntriesResult> {
-        let mut c = self.clients[peer_index].clone();
-        let r = req.clone();
-        let mut request = tonic::Request::new(r);
-        request.metadata_mut().insert("grpc-timeout", format!("{}m", timeout_millis).parse().unwrap());
-        let response = c.append_entries(request).await;
-        if response.is_err() {
-            return None;
-        }
-        let result = response.unwrap().into_inner();
-        Some(result)
-    }
-
-    pub async fn send_heartbeat_over_cluster<P: PersistentStateStorage, A: ApplyStorage>(&self, state: &Arc<RwLock<RaftConsensusState<P, A>>>, timeout_millis: u64) {
-        let term;
-        let leader_commit_index;
-        {
-            let state = state.read().unwrap();
-            if state.current_role != Leader {
-                return;
-            }
-            term = state.current_term;
-            leader_commit_index = state.commit_index;
-        }
-        let req = AppendEntriesRequest {
-            term,
-            leader_commit_index,
-            leader_id: self.node_id.clone(),
-            prev_log_index: 0,
-            prev_log_term: 0,
-            logs: vec![],
-        };
-
-        let mut futures = FuturesUnordered::new();
-        self.peers.iter().enumerate().for_each(|(i, _)| {
-            let fut = self.heartbeat(i, req.clone(), timeout_millis);
-            futures.push(fut);
-        });
-
-        while let Some(result) = futures.next().await {
-            let mut state = state.write().unwrap();
-            if state.current_role != Leader {
-                return;
-            }
-            if result.is_none() {
-                continue;
-            }
-            state.apply_heartbeat_result(result.unwrap());
             state.save_state_to_persistent_storage();
         }
     }

@@ -12,8 +12,7 @@ use crate::raft_state::RaftNodeRole;
 use crate::raft_state::RaftNodeRole::Leader;
 use crate::storage::{ApplyStorage, PersistentStateStorage};
 
-const RECONCILE_TICK_DURATION_MILLIS: u64 = 100;
-const HEART_BEAT_TICK_DURATION_MILLIS: u64 = 50;
+const RECONCILE_TICK_DURATION_MILLIS: u64 = 50;
 const APPEND_ENTRIES_TICK_DURATION_MILLIS: u64 = 100;
 
 pub struct RaftReconciler<P: PersistentStateStorage, A: ApplyStorage> {
@@ -119,42 +118,11 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftReconciler<P, A> {
         });
     }
 
-    pub fn spawn_heartbeat_loop(&mut self) {
-        let node_id = self.cluster_info.node_id.clone();
-        info!("Start heart beat loop: {}", node_id);
-        let mut interval = interval(core::time::Duration::from_millis(HEART_BEAT_TICK_DURATION_MILLIS));
-        let mut ch = self.signal.clone();
-        let rsc = self.client.clone();
-        let state_clone = self.state.clone();
-
-        tokio::spawn(async move {
-            loop {
-                select! {
-                    _ = ch.changed() => {
-                        return;
-                    }
-                    _ = interval.tick() => {
-                        info!("Sending heartbeats...: {}", node_id);
-                        {
-                            let current_role;
-                            current_role = state_clone.read().unwrap().current_role;
-                            if current_role != Leader {
-                                return;
-                            }
-                        }
-                        rsc.send_heartbeat_over_cluster(&state_clone, HEART_BEAT_TICK_DURATION_MILLIS).await;
-                    }
-                }
-            }
-        });
-    }
-
     fn reconcile_election_results(&mut self) {
         let granted_objective = (self.cluster_info.other_hosts.len() + 1) as i64;
         if 2 * self.received_granted() >= granted_objective {
             info!("Become the Leader: {}", self.cluster_info.node_id.clone());
             self.become_leader();
-            self.spawn_heartbeat_loop();
             self.spawn_append_entries_loop(APPEND_ENTRIES_TICK_DURATION_MILLIS);
         }
     }

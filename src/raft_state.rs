@@ -248,12 +248,6 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         let _ = self.storage.set(String::from("logs"), log_entries);
     }
 
-    pub(crate) fn apply_heartbeat_result(&mut self, result: AppendEntriesResult) {
-        if result.term > self.current_term {
-            self.become_follower(result.term);
-        }
-    }
-
     pub(crate) fn apply_request_vote_result(&mut self, result: RequestVoteResult) {
         if result.term > self.current_term {
             self.become_follower(result.term);
@@ -270,11 +264,14 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
             self.become_follower(result.term);
             return;
         }
-        if result.success {
+        if !result.success {
+            self.next_indexes[peer_index] -= 1;
+            return;
+        }
+
+        if self.logs.len() > 0 {
             self.next_indexes[peer_index] = self.logs.len() as i64;
             self.match_indexes[peer_index] = (self.logs.len() - 1) as i64;
-        } else {
-            self.next_indexes[peer_index] -= 1;
         }
     }
 
@@ -309,11 +306,6 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
         self.last_heartbeat_time = Utc::now();
         self.current_leader_id = req.leader_id.clone();
 
-        // heartbeat
-        if req.logs.len() == 0 {
-            return true;
-        };
-
         // append entries
         if req.prev_log_index < 0 {
             self.logs = req.logs.clone();
@@ -326,9 +318,12 @@ impl<P: PersistentStateStorage, A: ApplyStorage> RaftConsensusState<P, A> {
             if prev_log.term != req.prev_log_term {
                 return false;
             }
-            // Overwrite
-            self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
-            self.logs.append(&mut req.logs.clone());
+
+            if req.logs.len() > 0 {
+                // Overwrite
+                self.logs = self.logs[..=(req.prev_log_index as usize)].to_vec();
+                self.logs.append(&mut req.logs.clone());
+            }
         }
         if self.commit_index < req.leader_commit_index {
             self.commit_index = min(req.leader_commit_index, self.last_index());
@@ -478,20 +473,6 @@ mod tests {
         state.match_indexes = vec![0, 0];
         state.update_commit_index();
         assert_eq!(state.commit_index, 2);
-    }
-
-    #[test]
-    fn test_apply_heartbeat_result() {
-        // initialize
-        let mut state = RaftConsensusState::<MockInMemoryStorage, MockInMemoryKeyValueStore>::default();
-        state.initialize_indexes(2);
-        state.become_leader(String::from("leader"));
-        state.apply_heartbeat_result(AppendEntriesResult {
-            term: 2,
-            success: false,
-        });
-        assert_eq!(state.current_role, Follower);
-        assert_eq!(state.current_term, 2);
     }
 
     #[test]
